@@ -121,7 +121,11 @@ public class HandlerRegistry implements BotDispatcher {
 
         if (commandOpt.isPresent()) {
             String template = properties.getCommandPrefix() + commandOpt.get().value();
-            CommandEntry entry = new CommandEntry(template, (event, args) -> invokeMethod(bean, method, event, args), createFilter(annotations));
+            Predicate<Object> eventFilter = createEventFilter(annotations);
+            Predicate<MessageEvent> msgFilter = eventFilter == null ? null :
+                    e -> eventFilter.test(e);
+            CommandEntry entry = new CommandEntry(template,
+                    (event, args) -> invokeMethod(bean, method, event, args), msgFilter);
             commands.put(template, entry);
             log.debug("Registered command handler: {} on method {}", template, method.getName());
             return;
@@ -242,16 +246,20 @@ public class HandlerRegistry implements BotDispatcher {
                 .sorted(Comparator.comparingInt(HandlerEntry::priority))
                 .toList();
         log.info("Matched annotation handlers: count={}", matchedHandlers.size());
-        matchedHandlers.forEach(h -> {
+        for (HandlerEntry<?> h : matchedHandlers) {
             try {
                 log.info("Executing annotation handler: eventType={}, priority={}", h.eventType.getSimpleName(), h.priority);
                 ((Consumer<OB11Event>) h.executor).accept(event);
                 results.add(new HandlerResult(true, null));
+            } catch (StopRoutingException sre) {
+                log.debug("Annotation handler stopped routing");
+                results.add(new HandlerResult(true, null));
+                break;
             } catch (Exception e) {
                 log.error("Handler error", e);
                 results.add(new HandlerResult(false, e));
             }
-        });
+        }
 
         // 3. 接口 handler 匹配
         List<Consumer<OB11Event>> consumers = eventHandlers.get(event.getClass());
