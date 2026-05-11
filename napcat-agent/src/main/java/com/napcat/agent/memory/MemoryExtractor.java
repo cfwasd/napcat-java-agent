@@ -1,0 +1,123 @@
+package com.napcat.agent.memory;
+
+import com.napcat.agent.agent.NapCatAgent;
+import com.napcat.agent.llm.ChatMessage;
+import com.napcat.agent.session.Session;
+import com.napcat.agent.session.SessionKey;
+import com.napcat.core.message.MessageChain;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+
+/**
+ * 记忆提取器。
+ * 在 Agent 对话结束后，异步用 LLM 从完整会话历史中抽取结构化记忆，
+ * 写入 MemoryStore 供后续对话检索。
+ *
+ * 首版策略：积累超过阈值条消息后触发提取，用 LLM 自身完成摘要。
+ */
+@Slf4j
+public class MemoryExtractor {
+
+    private final MemoryStore memoryStore;
+    private final NapCatAgent agent;
+    private final int extractThreshold;  // 累积多少条消息后触发提取
+    private static final ObjectMapper mapper = new ObjectMapper();
+
+    public MemoryExtractor(MemoryStore memoryStore, NapCatAgent agent, int extractThreshold) {
+        this.memoryStore = memoryStore;
+        this.agent = agent;
+        this.extractThreshold = extractThreshold;
+    }
+
+    /**
+     * 检查是否需要提取记忆，如果是则异步执行。
+     * 在 Agent 回复后调用。
+     */
+    public void extractIfNeeded(SessionKey key, Session session) {
+        int msgCount = (int) session.getHistory().stream()
+                .filter(m -> !"system".equals(m.getRole()))
+                .count();
+
+        if (msgCount >= extractThreshold) {
+            // 异步提取，不阻塞主流程
+            CompletableFuture.runAsync(() -> doExtract(key, session));
+        }
+    }
+
+    private void doExtract(SessionKey key, Session session) {
+        try {
+            String prompt = buildExtractionPrompt(session);
+            if (prompt == null) return;
+
+            agent.chat(key, prompt,
+                    com.napcat.agent.agent.AgentConfig.builder()
+                            .maxRounds(1)
+                            .systemPrompt("你是一个信息提取助手。从对话中提取关于用户的关键事实、偏好和重要信息，以JSON数组格式返回。")
+                            .build(),
+                    null)
+                    .thenAccept(result -> parseAndPersist(key, result))
+                    .exceptionally(ex -> {
+                        log.warn("Memory extraction failed for {}", key, ex.getMessage());
+                        return null;
+                    });
+
+        } catch (Exception e) {
+            log.error("Memory extraction error for {}", key, e);
+        }
+    }
+
+    private String buildExtractionPrompt(Session session) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("从以下对话中提取关于用户的关键信息，以JSON数组格式返回：\n\n");
+        sb.append("```json\n[\n");
+        sb.append("  {\"type\": \"fact|preference|topic\", \"content\": \"...\", \"importance\": 1-5}\n");
+        sb.append("]\n```\n\n");
+        sb.append("规则：\n");
+        sb.append("- fact: 用户陈述的事实（姓名、地点、经历等）\n");
+        sb.append("- preference: 用户的偏好（喜欢/不喜欢什么）\n");
+        sb.append("- topic: 讨论过的重要话题\n");
+        sb.append("- importance: 1=次要, 3=一般, 5=非常重要\n");
+        sb.append("- 只提取有长期价值的、将来可能再次提到的信息\n");
+        sb.append("- 如果对话中没有任何值得长期记住的内容，返回空数组 []\n\n");
+        sb.append("对话内容：\n");
+
+        for (ChatMessage msg : session.getHistory()) {
+            if ("user".equals(msg.getRole()) || "assistant".equals(msg.getRole())) {
+                sb.append("[").append(msg.getRole()).append("]: ")
+                        .append(msg.getContent() != null ? msg.getContent() : "")
+                        .append("\n");
+            }
+        }
+
+        return sb.toString();
+    }
+
+    @SuppressWarnings("unchecked")
+    private void parseAndPersist(SessionKey key, String json) {
+        try {
+            // 提取 JSON 数组部分
+            int start = json.indexOf('[');
+            int end = json.lastIndexOf(']');
+            if (start < 0 || end < 0 || start >= end) return;
+
+            String jsonArray = json.substring(start, end + 1);
+            List<java.util.Map<String, Object>> items = mapper.readValue(jsonArray,
+                    new com.fasterxml.jackson.core.type.TypeReference<List<java.util.Map<String, Object>>>() {});
+
+            for (var item : items) {
+                String type = (String) item.getOrDefault("type", "summary");
+                String content = (String) item.get("content");
+                if (content != null && !content.isBlank()) {
+                    memoryStore.persist(key, content, type);
+                }
+            }
+
+            log.info("Extracted {} memories for {}", items.size(), key);
+        } catch (Exception e) {
+            log.warn("Failed to parse memory extraction result for {}", key, e);
+        }
+    }
+}

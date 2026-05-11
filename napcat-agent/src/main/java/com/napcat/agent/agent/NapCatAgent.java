@@ -3,6 +3,8 @@ package com.napcat.agent.agent;
 import com.napcat.agent.llm.ChatMessage;
 import com.napcat.agent.llm.LlmProvider;
 import com.napcat.agent.llm.LlmResponse;
+import com.napcat.agent.memory.MemoryExtractor;
+import com.napcat.agent.memory.MemoryStore;
 import com.napcat.agent.session.Session;
 import com.napcat.agent.session.SessionKey;
 import com.napcat.agent.session.SessionManager;
@@ -21,16 +23,33 @@ public class NapCatAgent {
     private final LlmProvider llmProvider;
     private final ToolRegistry toolRegistry;
     private final SessionManager sessionManager;
+    private final MemoryStore memoryStore;
+    private final MemoryExtractor memoryExtractor;
     private final String defaultSystemPrompt;
     private final int defaultMaxRounds;
+    private final boolean enableVision;
 
     public NapCatAgent(LlmProvider llmProvider, ToolRegistry toolRegistry, SessionManager sessionManager,
                        String defaultSystemPrompt, int defaultMaxRounds) {
+        this(llmProvider, toolRegistry, sessionManager, null, null, defaultSystemPrompt, defaultMaxRounds, true);
+    }
+
+    public NapCatAgent(LlmProvider llmProvider, ToolRegistry toolRegistry, SessionManager sessionManager,
+                       String defaultSystemPrompt, int defaultMaxRounds, boolean enableVision) {
+        this(llmProvider, toolRegistry, sessionManager, null, null, defaultSystemPrompt, defaultMaxRounds, enableVision);
+    }
+
+    public NapCatAgent(LlmProvider llmProvider, ToolRegistry toolRegistry, SessionManager sessionManager,
+                       MemoryStore memoryStore, MemoryExtractor memoryExtractor,
+                       String defaultSystemPrompt, int defaultMaxRounds, boolean enableVision) {
         this.llmProvider = llmProvider;
         this.toolRegistry = toolRegistry;
         this.sessionManager = sessionManager;
+        this.memoryStore = memoryStore;
+        this.memoryExtractor = memoryExtractor;
         this.defaultSystemPrompt = defaultSystemPrompt;
         this.defaultMaxRounds = defaultMaxRounds;
+        this.enableVision = enableVision;
     }
 
     // ========= 便捷方法：仅 userId（私聊场景，保持向后兼容） =========
@@ -91,16 +110,36 @@ public class NapCatAgent {
         if (session.getHistory().isEmpty()) {
             String prompt = buildEffectivePrompt(config);
             if (prompt != null && !prompt.isBlank()) {
+                // 注入长期记忆
+                if (config.isMemoryEnabled() && memoryStore != null) {
+                    java.util.List<String> memories = memoryStore.retrieve(sessionKey, input, config.getMemoryMaxResults());
+                    if (!memories.isEmpty()) {
+                        StringBuilder memText = new StringBuilder(prompt);
+                        memText.append("\n\n## 关于用户的已知信息\n");
+                        for (String m : memories) {
+                            memText.append("- ").append(m).append("\n");
+                        }
+                        prompt = memText.toString();
+                    }
+                }
                 session.addMessage(new ChatMessage("system", prompt, null));
             }
         }
 
         ChatMessage userMsg = new ChatMessage("user", input, null);
-        java.util.List<String> imageUrls = extractImageUrls(input);
-        if (!imageUrls.isEmpty()) {
-            userMsg.setImageUrls(imageUrls);
-            // 文本中保留 [图片] 占位，避免 URL 重复干扰模型
-            userMsg.setContent(input.replaceAll("\\[图片:[^\\]]+\\]", "[图片]"));
+        if (enableVision) {
+            java.util.List<String> imageUrls = extractImageUrls(input);
+            if (!imageUrls.isEmpty()) {
+                userMsg.setImageUrls(imageUrls);
+                // 文本中保留 [图片] 占位，避免 URL 重复干扰模型
+                userMsg.setContent(input.replaceAll("\\[图片:[^\\]]+\\]", "[图片]"));
+            }
+        } else {
+            // 如果禁用图片功能，移除图片标记
+            if (input.contains("[图片:")) {
+                userMsg.setContent(input.replaceAll("\\[图片:[^\\]]+\\]", "[图片]"));
+                log.debug("[Agent] Vision disabled, ignored image URLs in message");
+            }
         }
         session.addMessage(userMsg);
 
@@ -156,15 +195,11 @@ public class NapCatAgent {
 
         List<ToolSchema> tools = toolRegistry.getSchemas();
         if (!tools.isEmpty()) {
-            sb.append("\n\n## 可用工具\n");
+            sb.append("\n工具：\n");
             for (ToolSchema tool : tools) {
-                sb.append("- **").append(tool.getName()).append("**：").append(tool.getDescription());
-                if (tool.getRequired() != null && !tool.getRequired().isEmpty()) {
-                    sb.append(" 必填参数：").append(String.join("、", tool.getRequired()));
-                }
-                sb.append("\n");
+                sb.append("- **").append(tool.getName()).append("**：").append(tool.getDescription()).append("\n");
             }
-            sb.append("\n当需要上述工具的能力时，请调用对应函数，不要直接回复\"我无法xxx\"。");
+            sb.append("非必要不调用工具。\n");
         }
 
         return sb.toString().trim().isEmpty() ? null : sb.toString().trim();
@@ -215,21 +250,53 @@ public class NapCatAgent {
                             assistantMsg.setReasoningContent(response.getReasoningContent());
                         }
                         session.addMessage(assistantMsg);
+
+                        // 触发记忆提取（异步，不阻塞响应）
+                        if (config.isMemoryEnabled() && memoryExtractor != null) {
+                            memoryExtractor.extractIfNeeded(session.getKey(), session);
+                        }
+
                         return CompletableFuture.completedFuture(content);
                     }
                 })
                 .exceptionally(ex -> {
-                    // 区分客户端错误和服务器错误，客户端错误不返回给QQ
                     String errorMsg = ex.getMessage();
-                    if (errorMsg != null && (errorMsg.contains("API请求错误: 4") || errorMsg.contains("invalid_request"))) {
-                        log.warn("[Agent] API request error in round {}: {}", round, ex.getMessage());
-                        return null; // 不返回消息给用户
-                    } else {
-                        log.error("[Agent] Error in round {}", round, ex);
-                        String fallbackMsg = "处理出错了，请稍后再试。";
-                        session.addMessage(new ChatMessage("assistant", fallbackMsg, null));
-                        return fallbackMsg;
+                    
+                    if (errorMsg != null) {
+                        if (errorMsg.contains("API请求错误: 4")) {
+                            log.warn("[Agent] API client error in round {}: {}", round, ex.getMessage());
+                            return null;
+                        }
+                        
+                        if (errorMsg.contains("图片加载失败") || errorMsg.contains("IMAGE data") 
+                                || errorMsg.contains("multimedia.nt.qq.com.cn")) {
+                            log.warn("[Agent] Image loading failed in round {}. LLM cannot access QQ image URLs.", round);
+                            String imageErrorMsg = "我看到你发了图片，但是我这边的AI服务器无法直接访问QQ的图片链接😅\n你可以描述一下图片内容，我来帮你分析~";
+                            session.addMessage(new ChatMessage("assistant", imageErrorMsg, null));
+                            return imageErrorMsg;
+                        }
+                        
+                        if (errorMsg.contains("timeout") || errorMsg.contains("SocketTimeoutException") 
+                                || errorMsg.contains("timed out")) {
+                            log.warn("[Agent] Request timeout in round {}. The API server may be slow or unreachable.", round);
+                            String timeoutMsg = "哎呀，网络有点卡，服务器响应超时了😅 要不再试一次？";
+                            session.addMessage(new ChatMessage("assistant", timeoutMsg, null));
+                            return timeoutMsg;
+                        }
+                        
+                        if (errorMsg.contains("Connection refused") || errorMsg.contains("ConnectException")) {
+                            log.warn("[Agent] Connection failed in round {}: {}", round, ex.getMessage());
+                            String connMsg = "网络连接失败了，可能是服务器暂时不可用😔";
+                            session.addMessage(new ChatMessage("assistant", connMsg, null));
+                            return connMsg;
+                        }
                     }
+                    
+                    log.error("[Agent] Error in round {}", round, ex);
+                    String fallbackMsg = "处理出错了，请稍后再试。";
+                    session.addMessage(new ChatMessage("assistant", fallbackMsg, null));
+                    return fallbackMsg;
                 });
+
     }
 }

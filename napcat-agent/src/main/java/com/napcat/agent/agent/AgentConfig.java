@@ -32,4 +32,13 @@ public class AgentConfig {
      * }</pre>
      */
     private Runnable ackCallback;
+    /** 是否启用长期记忆注入 */
+    @Builder.Default
+    private boolean memoryEnabled = false;
+    /** 每次检索的记忆最大条数 */
+    @Builder.Default
+    private int memoryMaxResults = 5;
+    /** 累积多少条消息后触发记忆提取（0=不自动提取） */
+    @Builder.Default
+    private int memoryExtractThreshold = 20;
 }

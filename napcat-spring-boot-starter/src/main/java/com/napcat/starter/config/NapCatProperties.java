@@ -14,6 +14,8 @@ public class NapCatProperties {
     private BotProperties bot = new BotProperties();
     private LlmProperties llm = new LlmProperties();
     private AgentProperties agent = new AgentProperties();
+    private MemoryProperties memory = new MemoryProperties();
+    private SchedulerProperties scheduler = new SchedulerProperties();
     private CoreProperties core = new CoreProperties();
 
     @Data
@@ -82,6 +84,8 @@ public class NapCatProperties {
         private ProviderConfig anthropic = new ProviderConfig();
         private ProviderConfig ollama = new ProviderConfig();
         private ProviderConfig custom = new ProviderConfig();
+        /** 备用模型配置（当主模型失败时使用） */
+        private FallbackProviderConfig fallback = new FallbackProviderConfig();
     }
 
     @Data
@@ -95,22 +99,32 @@ public class NapCatProperties {
     }
 
     @Data
+    public static class FallbackProviderConfig {
+        /** 是否启用备用模型 */
+        private boolean enabled = false;
+        /** 备用模型的 provider 类型：openai / anthropic / ollama / custom */
+        private String provider = "openai";
+        private String baseUrl;
+        private String apiKey = "";
+        private String model;
+        private int maxTokens = 2000;
+        private double temperature = 0.7;
+        private long timeout = 60000;
+    }
+
+    @Data
     public static class AgentProperties {
         private boolean enabled = false;
         private int maxReactRounds = 5;
-        private String systemPrompt = "你是一个有用的 QQ 助手。你可以使用提供的工具（tools）来完成任务。\n"
-                + "重要规则：\n"
-                + "1. 如果需要实时信息或联网搜索，必须调用 web_search 工具，不要直接说'无法访问网络'。\n"
-                + "2. 如果用户消息中包含任何 URL 链接（网页、图片、文件、视频等），禁止自行推测内容，必须调用 fetch_url 工具获取实际内容后再回答。\n"
-                + "3. 如果询问当前时间或日期，使用 get_current_time 工具。\n"
-                + "4. 基于工具返回的结果回答用户，保持简洁、友好。\n"
-                + "5. 如果所有工具都无法满足用户需求，再礼貌地说明限制。";
+        private String systemPrompt = "你是一个友好的QQ机器人。优先直接回答，仅用户明确要求搜索/查时间/访问链接时才用工具。";
         private long timeoutPerRound = 30000;
         private long sessionTtl = 3600;
         /** 是否将工具调用过程发送到聊天 */
         private boolean showToolProcess = false;
         /** 会话历史最大消息条数，超出时自动截断（保留 system + 最近 N 条） */
         private int maxHistoryMessages = 50;
+        /** 是否启用图片识别功能（如果LLM服务器无法访问QQ图片链接，建议关闭） */
+        private boolean enableVision = true;
         /** 内置工具开关 */
         private BuiltinToolsProperties builtin = new BuiltinToolsProperties();
     }
@@ -134,10 +148,32 @@ public class NapCatProperties {
     }
 
     @Data
+    public static class MemoryProperties {
+        /** 是否启用长久记忆 */
+        private boolean enabled = false;
+        /** 每次对话检索记忆条数 */
+        private int maxResults = 5;
+        /** 累积多少条消息触发提取 */
+        private int extractThreshold = 20;
+    }
+
+    @Data
+    public static class SchedulerProperties {
+        /** 是否启用定时任务调度 */
+        private boolean enabled = true;
+        /** 轮询间隔（毫秒），默认 5 分钟 */
+        private long pollIntervalMs = 5 * 60 * 1000;
+        /** 提前注册窗口（毫秒），默认 5 分钟 */
+        private long pollWindowMs = 5 * 60 * 1000;
+    }
+
+    @Data
     public static class CoreProperties {
         private ExecutorProperties eventExecutor = new ExecutorProperties();
         private String messagePostFormat = "array";
         private boolean syncEventProcessing = false;
+        /** SQLite 数据库文件路径，默认 napcat_data/napcat.db */
+        private String databasePath = "napcat_data/napcat.db";
     }
 
     @Data

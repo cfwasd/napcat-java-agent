@@ -10,6 +10,10 @@ import com.napcat.core.api.NapCatApi;
 import com.napcat.core.config.BotProperties;
 import com.napcat.core.handler.EventDispatcher;
 import com.napcat.core.handler.HandlerRegistry;
+import com.napcat.core.scheduler.*;
+import com.napcat.agent.memory.*;
+import com.napcat.agent.scheduler.TaskExecutor;
+import com.napcat.agent.scheduler.ScheduleTool;
 import com.napcat.starter.adapter.HttpServerAdapter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -178,13 +182,208 @@ public class NapCatAutoConfiguration {
     @ConditionalOnProperty(prefix = "napcat.agent", name = "enabled", havingValue = "true")
     @ConditionalOnMissingBean
     public NapCatAgent napCatAgent(ObjectProvider<LlmProvider> llmProvider, ToolRegistry toolRegistry,
-                                    SessionManager sessionManager, NapCatProperties props) {
+                                    SessionManager sessionManager, NapCatProperties props,
+                                    ApplicationContext ctx) {
         LlmProvider provider = llmProvider.getIfAvailable();
         if (provider == null) {
             throw new IllegalStateException("No LlmProvider bean found. Please add a provider dependency like napcat-llm-openai.");
         }
+
+        // 如果启用了备用模型，创建 FallbackLlmProvider
+        if (props.getLlm().getFallback().isEnabled()) {
+            LlmProvider fallbackProvider = createFallbackProvider(props);
+            if (fallbackProvider != null) {
+                provider = new com.napcat.agent.llm.FallbackLlmProvider(provider, fallbackProvider, true);
+                log.info("✅ Fallback LLM provider enabled: primary -> {}", 
+                        props.getLlm().getFallback().getProvider());
+            }
+        }
+
         return new NapCatAgent(provider, toolRegistry, sessionManager,
-                props.getAgent().getSystemPrompt(), props.getAgent().getMaxReactRounds());
+                ctx.getBeanProvider(MemoryStore.class).getIfAvailable(),
+                ctx.getBeanProvider(MemoryExtractor.class).getIfAvailable(),
+                props.getAgent().getSystemPrompt(), props.getAgent().getMaxReactRounds(),
+                props.getAgent().isEnableVision());
+    }
+
+    /**
+     * 创建备用 LLM Provider
+     */
+    private LlmProvider createFallbackProvider(NapCatProperties props) {
+        var fallback = props.getLlm().getFallback();
+        String providerType = fallback.getProvider().toLowerCase();
+        
+        try {
+            return switch (providerType) {
+                case "openai", "custom" -> createOpenAiProvider(fallback);
+                case "anthropic" -> createAnthropicProvider(fallback);
+                case "ollama" -> createOllamaProvider(fallback);
+                default -> {
+                    log.warn("❌ Unknown fallback provider type: {}", providerType);
+                    yield null;
+                }
+            };
+        } catch (Exception e) {
+            log.error("❌ Failed to create fallback LLM provider: {}", providerType, e);
+            return null;
+        }
+    }
+
+    /**
+     * 通过反射创建 OpenAI Provider（避免循环依赖）
+     */
+    private LlmProvider createOpenAiProvider(NapCatProperties.FallbackProviderConfig config) {
+        try {
+            Class<?> clazz = Class.forName("com.napcat.llm.openai.OpenAiProvider");
+            return (LlmProvider) clazz.getConstructor(
+                    String.class, String.class, String.class, 
+                    int.class, double.class, long.class
+            ).newInstance(
+                    config.getBaseUrl(),
+                    config.getApiKey(),
+                    config.getModel(),
+                    config.getMaxTokens(),
+                    config.getTemperature(),
+                    config.getTimeout()
+            );
+        } catch (ClassNotFoundException e) {
+            log.error("OpenAI provider class not found. Make sure napcat-llm-openai is in classpath.");
+            return null;
+        } catch (Exception e) {
+            log.error("Failed to create OpenAI provider", e);
+            return null;
+        }
+    }
+
+    /**
+     * 通过反射创建 Anthropic Provider（避免循环依赖）
+     */
+    private LlmProvider createAnthropicProvider(NapCatProperties.FallbackProviderConfig config) {
+        try {
+            Class<?> clazz = Class.forName("com.napcat.llm.anthropic.AnthropicProvider");
+            return (LlmProvider) clazz.getConstructor(
+                    String.class, String.class, String.class,
+                    int.class, double.class, long.class
+            ).newInstance(
+                    config.getBaseUrl(),
+                    config.getApiKey(),
+                    config.getModel(),
+                    config.getMaxTokens(),
+                    config.getTemperature(),
+                    config.getTimeout()
+            );
+        } catch (ClassNotFoundException e) {
+            log.error("Anthropic provider class not found. Make sure napcat-llm-anthropic is in classpath.");
+            return null;
+        } catch (Exception e) {
+            log.error("Failed to create Anthropic provider", e);
+            return null;
+        }
+    }
+
+    /**
+     * 通过反射创建 Ollama Provider（避免循环依赖）
+     */
+    private LlmProvider createOllamaProvider(NapCatProperties.FallbackProviderConfig config) {
+        try {
+            Class<?> clazz = Class.forName("com.napcat.llm.ollama.OllamaProvider");
+            return (LlmProvider) clazz.getConstructor(
+                    String.class, String.class, long.class
+            ).newInstance(
+                    config.getBaseUrl(),
+                    config.getModel(),
+                    config.getTimeout()
+            );
+        } catch (ClassNotFoundException e) {
+            log.error("Ollama provider class not found. Make sure napcat-llm-ollama is in classpath.");
+            return null;
+        } catch (Exception e) {
+            log.error("Failed to create Ollama provider", e);
+            return null;
+        }
+    }
+
+    // ================================================================
+    // Database
+    // ================================================================
+
+    @Bean
+    @ConditionalOnMissingBean
+    public DbManager dbManager(NapCatProperties props) {
+        DbManager db = new DbManager(props.getCore().getDatabasePath());
+        db.init();
+        return db;
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public MigrationManager migrationManager(DbManager dbManager) {
+        MigrationManager mm = new MigrationManager(dbManager);
+        // 注册 schedules + memories 表
+        mm.register(1, "create schedules table", ScheduleStore.ddl());
+        mm.register(2, "create memories table", SqliteMemoryStore.ddl());
+        mm.migrate();
+        return mm;
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public ScheduleStore scheduleStore(DbManager dbManager) {
+        return new ScheduleStore(dbManager);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "napcat.scheduler", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public TimerWheel timerWheel() {
+        return new TimerWheel();
+    }
+
+    @Bean(name = "napcatTaskExecutor")
+    @ConditionalOnMissingBean(name = "napcatTaskExecutor")
+    @ConditionalOnProperty(prefix = "napcat.scheduler", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public TaskExecutor taskExecutor(NapCatApi api, ObjectProvider<NapCatAgent> agentProvider) {
+        return new TaskExecutor(api, agentProvider.getIfAvailable());
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "napcat.scheduler", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public ScheduleTool scheduleTool(ScheduleStore store, ObjectProvider<SchedulePoller> pollerProvider) {
+        return new ScheduleTool(store, pollerProvider.getIfAvailable());
+    }
+
+    // ================================================================
+    // Memory
+    // ================================================================
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "napcat.memory", name = "enabled", havingValue = "true")
+    public MemoryStore memoryStore(DbManager dbManager) {
+        return new SqliteMemoryStore(dbManager);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "napcat.memory", name = "enabled", havingValue = "true")
+    public MemoryExtractor memoryExtractor(MemoryStore memoryStore, NapCatAgent agent, NapCatProperties props) {
+        return new MemoryExtractor(memoryStore, agent, props.getMemory().getExtractThreshold());
+    }
+
+    // ================================================================
+    // Scheduler
+    // ================================================================
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "napcat.scheduler", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public SchedulePoller schedulePoller(ScheduleStore store, TimerWheel timerWheel,
+                                          @org.springframework.beans.factory.annotation.Qualifier("napcatTaskExecutor") TaskExecutor executor, NapCatProperties props) {
+        SchedulePoller poller = new SchedulePoller(store, timerWheel, executor::execute,
+                props.getScheduler().getPollIntervalMs(),
+                props.getScheduler().getPollWindowMs());
+        return poller;
     }
 
     // ================================================================

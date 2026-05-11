@@ -1,6 +1,8 @@
 package com.napcat.starter.config;
 
 import com.napcat.agent.agent.NapCatAgent;
+import com.napcat.agent.scheduler.ScheduleTool;
+import com.napcat.agent.tool.ToolRegistry;
 import com.napcat.core.adapter.BotAdapter;
 import com.napcat.core.adapter.MessageRouter;
 import com.napcat.core.api.NapCatApi;
@@ -12,6 +14,7 @@ import com.napcat.core.event.OB11Event;
 import com.napcat.core.handler.EventDispatcher;
 import com.napcat.core.handler.HandlerRegistry;
 import com.napcat.core.message.MessageChain;
+import com.napcat.core.scheduler.SchedulePoller;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationContext;
@@ -56,6 +59,25 @@ public class NapCatLifecycle implements SmartLifecycle {
     public void start() {
         // 事件管道：MessageRouter → EventDispatcher
         messageRouter.setEventConsumer(this::onEvent);
+
+        // 启动调度器
+        try {
+            SchedulePoller poller = ctx.getBeanProvider(SchedulePoller.class).getIfAvailable();
+            if (poller != null) {
+                poller.start();
+                log.info("SchedulePoller started");
+            }
+
+            // 注册 ScheduleTool 到 ToolRegistry
+            ScheduleTool scheduleTool = ctx.getBeanProvider(ScheduleTool.class).getIfAvailable();
+            ToolRegistry toolRegistry = ctx.getBeanProvider(ToolRegistry.class).getIfAvailable();
+            if (scheduleTool != null && toolRegistry != null) {
+                toolRegistry.register(scheduleTool);
+                log.info("ScheduleTool registered with ToolRegistry");
+            }
+        } catch (Exception e) {
+            log.warn("Failed to start scheduler: {}", e.getMessage());
+        }
 
         // at-me-trigger 兜底：被 @ 时自动走 Agent
         if (botProperties.isAtMeTrigger()) {
@@ -106,6 +128,15 @@ public class NapCatLifecycle implements SmartLifecycle {
 
     @Override
     public void stop() {
+        try {
+            SchedulePoller poller = ctx.getBeanProvider(SchedulePoller.class).getIfAvailable();
+            if (poller != null) {
+                poller.stop();
+            }
+        } catch (Exception e) {
+            log.warn("Failed to stop scheduler: {}", e.getMessage());
+        }
+
         for (BotAdapter adapter : adapters) {
             adapter.stop();
         }

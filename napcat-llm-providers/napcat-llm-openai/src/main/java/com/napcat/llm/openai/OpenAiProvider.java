@@ -159,12 +159,24 @@ public class OpenAiProvider implements LlmProvider {
 
                         if (!response.isSuccessful()) {
                             int statusCode = response.code();
+                            String errorBody = respJson;
+                            
                             if (statusCode >= 400 && statusCode < 500) {
-                                log.warn("OpenAI API client error ({}): {}", statusCode, respJson);
+                                log.warn("OpenAI API client error ({}): {}", statusCode, errorBody);
                                 future.completeExceptionally(new RuntimeException("API请求错误: " + statusCode));
                             } else {
-                                log.error("OpenAI API server error ({}): {}", statusCode, respJson);
-                                future.completeExceptionally(new RuntimeException("服务器错误: " + statusCode));
+                                // 检查是否是图片加载失败的错误
+                                boolean isImageLoadError = errorBody.contains("IMAGE data") || 
+                                                          errorBody.contains("loading data ImageData") ||
+                                                          errorBody.contains("multimedia.nt.qq.com.cn");
+                                
+                                if (isImageLoadError) {
+                                    log.warn("Image loading failed - LLM server cannot access QQ image URLs. Error: {}", errorBody);
+                                    future.completeExceptionally(new RuntimeException("图片加载失败: LLM服务器无法访问QQ图片链接"));
+                                } else {
+                                    log.error("OpenAI API server error ({}): {}", statusCode, errorBody);
+                                    future.completeExceptionally(new RuntimeException("服务器错误: " + statusCode));
+                                }
                             }
                             return;
                         }
@@ -232,4 +244,3 @@ public class OpenAiProvider implements LlmProvider {
         }
     }
 }
-// ... existing code ...
