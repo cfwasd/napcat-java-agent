@@ -1,0 +1,6 @@
+- [WeChat 集成总览](wechat-integration.md) — agent-wechat REST 接入、触发策略、命令复用、启动行为
+- [微信识图链路](wechat-image-vision.md) — 私聊单图 → getMedia → data URL → 走 enable-vision，群聊不识图
+- [agent-wechat 发送 payload](wechat-send-payload.md) — image/file 必须是 `{data, mimeType/filename}` 对象，不是字符串
+- [微信跳过 OneBot raw API](wechat-onebot-raw-api-skip.md) — 调 NapCatApi 前先 `isAvailable()`，避免 No BotAdapter 异常
+- [项目 TDD 工作流](project-tdd-workflow.md) — wechat 模块新行为必须先写失败测试再实现
+- [agent-wechat 源码与 API 参考](agent-wechat-source.md) — 本地源码路径、关键 schema、msg type=3 是图片
