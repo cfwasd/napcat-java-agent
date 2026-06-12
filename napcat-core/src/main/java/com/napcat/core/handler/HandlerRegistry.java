@@ -30,6 +30,9 @@ public class HandlerRegistry implements BotDispatcher {
     /** 当事件未被任何 handler 处理时的兜底回调（用于 at-me-trigger 等场景） */
     private Consumer<OB11Event> fallbackHandler;
 
+    /** 安静模式检查器：接受 groupId，返回 true 表示该群处于安静模式 */
+    private java.util.function.LongPredicate silentModeChecker = groupId -> false;
+
     public HandlerRegistry(BotProperties properties) {
         this.properties = properties;
     }
@@ -39,6 +42,14 @@ public class HandlerRegistry implements BotDispatcher {
      */
     public void setFallbackHandler(Consumer<OB11Event> fallbackHandler) {
         this.fallbackHandler = fallbackHandler;
+    }
+
+    /**
+     * 设置安静模式检查器。
+     * @param checker 接受 groupId，返回 true 表示该群处于安静模式
+     */
+    public void setSilentModeChecker(java.util.function.LongPredicate checker) {
+        this.silentModeChecker = checker != null ? checker : (groupId -> false);
     }
 
     @Override
@@ -68,7 +79,7 @@ public class HandlerRegistry implements BotDispatcher {
     @Override
     public void registerCommand(String template, BiConsumer<MessageEvent, CommandHandler.CommandArgs> handler, Predicate<MessageEvent> filter) {
         commands.computeIfAbsent(template, k -> new ArrayList<>())
-                .add(new CommandEntry(template, handler, filter, null));
+                .add(new CommandEntry(template, handler, filter, null, false));
     }
 
     public void registerBean(Object bean) {
@@ -118,10 +129,15 @@ public class HandlerRegistry implements BotDispatcher {
         boolean hasRequest = annotations.stream().anyMatch(a -> a instanceof OnRequest);
         boolean hasMeta = annotations.stream().anyMatch(a -> a instanceof OnMetaEvent);
 
-        Optional<Command> commandOpt = annotations.stream()
-                .filter(a -> a instanceof Command)
-                .map(a -> (Command) a)
-                .findFirst();
+        // 收集所有 @Command 注解（支持 @Repeatable 多命令别名）
+        List<Command> commandList = new ArrayList<>();
+        for (Annotation ann : method.getAnnotations()) {
+            if (ann instanceof Command cmd) {
+                commandList.add(cmd);
+            } else if (ann instanceof Commands container) {
+                commandList.addAll(java.util.Arrays.asList(container.value()));
+            }
+        }
 
         boolean hasMention = annotations.stream().anyMatch(a -> a instanceof MentionFilter);
 
@@ -131,20 +147,23 @@ public class HandlerRegistry implements BotDispatcher {
 
         method.setAccessible(true);
 
-        if (commandOpt.isPresent()) {
-            Command cmd = commandOpt.get();
-            String template = properties.getCommandPrefix() + cmd.value();
+        if (!commandList.isEmpty()) {
             Predicate<Object> eventFilter = createEventFilter(annotations);
             Predicate<MessageEvent> msgFilter = eventFilter == null ? null :
                     e -> eventFilter.test(e);
             Class<? extends MessageEvent> eventType = null;
             if (hasGroupMessage && !hasPrivateMessage) eventType = GroupMessageEvent.class;
             if (hasPrivateMessage && !hasGroupMessage) eventType = PrivateMessageEvent.class;
-            CommandEntry entry = new CommandEntry(template,
-                    (event, args) -> invokeMethod(bean, method, event, args), msgFilter, eventType);
-            commands.computeIfAbsent(template, k -> new ArrayList<>()).add(entry);
-            commandHelps.add(new CommandHelp(template, cmd.description(), cmd.adminOnly()));
-            log.debug("Registered command handler: {} on method {} type={}", template, method.getName(), eventType);
+            for (Command cmd : commandList) {
+                String template = properties.getCommandPrefix() + cmd.value();
+                CommandEntry entry = new CommandEntry(template,
+                        (event, args) -> invokeMethod(bean, method, event, args),
+                        msgFilter, eventType, cmd.silentModeAllowed());
+                commands.computeIfAbsent(template, k -> new ArrayList<>()).add(entry);
+                commandHelps.add(new CommandHelp(template, cmd.description(), cmd.adminOnly()));
+                log.debug("Registered command handler: {} on method {} type={} silentModeAllowed={}",
+                        template, method.getName(), eventType, cmd.silentModeAllowed());
+            }
             return;
         }
 
@@ -284,17 +303,28 @@ public class HandlerRegistry implements BotDispatcher {
     @SuppressWarnings("unchecked")
     public List<HandlerResult> dispatch(OB11Event event) {
         List<HandlerResult> results = new ArrayList<>();
-        
+
         // 只记录非心跳事件的调度信息，且使用 DEBUG 级别
         if (!(event instanceof com.napcat.core.event.HeartbeatEvent)) {
             log.debug("Dispatching event: class={}, handlers={}, commands={}",
                     event.getClass().getSimpleName(), handlers.size(), commands.size());
         }
 
+        // 0. 安静模式检测（仅群聊）
+        boolean silentActive = false;
+        long silentGroupId = 0;
+        if (event instanceof GroupMessageEvent groupMsg) {
+            silentGroupId = groupMsg.getGroupId();
+            silentActive = silentModeChecker.test(silentGroupId);
+            if (silentActive) {
+                log.debug("群 [{}] 处于安静模式，仅允许 silentModeAllowed 命令", silentGroupId);
+            }
+        }
+
         // 1. 命令匹配（消息事件）
         if (event instanceof MessageEvent msgEvent) {
             String plainText = msgEvent.getPlainText().trim();
-            
+
             if (log.isDebugEnabled()) {
                 if (msgEvent instanceof GroupMessageEvent groupEvent) {
                     String senderName = groupEvent.getSender() != null ? groupEvent.getSender().getNickname() : "未知";
@@ -311,6 +341,11 @@ public class HandlerRegistry implements BotDispatcher {
                 for (CommandEntry entry : entries) {
                     CommandHandler.CommandArgs args = matchCommand(entry.template, plainText);
                     if (args != null) {
+                        // 安静模式下：跳过不允许的命令
+                        if (silentActive && !entry.isSilentModeAllowed()) {
+                            log.debug("安静模式下跳过命令: {}", entry.template);
+                            continue;
+                        }
                         log.debug("命令匹配: 模板='{}', 消息='{}'", entry.template, plainText);
                         commandMatched = true;
                         try {
@@ -329,6 +364,12 @@ public class HandlerRegistry implements BotDispatcher {
                 }
             }
 
+        }
+
+        // 安静模式下：跳过所有非命令 handler
+        if (silentActive) {
+            log.debug("群 [{}] 安静模式活跃，跳过注解/接口/兜底 handler", silentGroupId);
+            return results;
         }
 
         // 2. 注解 handler 匹配
@@ -535,6 +576,8 @@ public class HandlerRegistry implements BotDispatcher {
         private final Predicate<MessageEvent> filter;
         /** 命令绑定的事件类型；null 表示不限制（同时标注了 @OnGroupMessage 和 @OnPrivateMessage 时也视为 null） */
         private final Class<? extends MessageEvent> eventType;
+        /** 是否允许在安静模式下执行 */
+        private final boolean silentModeAllowed;
     }
 
     public record HandlerResult(boolean success, Throwable error) {}

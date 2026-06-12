@@ -27,7 +27,7 @@ mvn package -pl napcat-admin -am -DskipTests
 - `napcat-core`: OneBot11 protocol implementation, communication adapters (HTTP/WS client/server), event routing, SQLite persistence (`DbManager`, `ScheduleStore`).
 - `napcat-agent`: LLM Agent engine. Contains `NapCatAgent` (ReAct loop), `ToolRegistry`, session management, and the persistent memory subsystem (`MemoryStore`, `MemoryExtractor`, `DailyMemorySummarizer`).
 - `napcat-llm-providers`: OpenAI-compatible, Anthropic Claude, and Ollama provider implementations. All implement `LlmProvider`.
-- `napcat-spring-boot-starter`: Auto-configuration (`NapCatAutoConfiguration`) that wires everything together, including adapter selection based on `napcat.adapter.type`.
+- `napcat-spring-boot-starter`: Auto-configuration (`NapCatAutoConfiguration`) that wires everything together, including adapter selection based on `napcat.adapter.type`. Also hosts the WeChat integration (`AgentWechatClient`, `AgentWechatPoller`, `WechatIdMapper`) under `com.napcat.starter.wechat`.
 - `napcat-admin`: Example Spring Boot application. Add bot classes here under `com.napcat.admin.bot`. Main class: `com.napcat.admin.NapCatApplication`.
 
 ## Key Architecture Patterns
@@ -59,10 +59,23 @@ mvn package -pl napcat-admin -am -DskipTests
 - `SessionManager` holds in-memory sessions with TTL and max history truncation.
 - `SessionManager.clearExpired()` persists full session history to `memories` (type=`full_session`) before removal.
 
+### WeChat Integration (agent-wechat REST)
+- Enabled via `napcat.wechat.enabled=true`. The poller is only registered when `napcat.wechat.enabled` and `napcat.agent.enabled` are both true (`@ConditionalOnExpression`).
+- `AgentWechatPoller` polls agent-wechat REST API on a single-threaded scheduler. `start()` initializes `lastSeenLocalIds` from the latest message in each chat so historical messages are NOT replayed on startup.
+- WeChat string IDs are hashed to stable positive `long` via `WechatIdMapper` so they can be used as `(userId, groupId)` for `NapCatAgent`. Private chats use `groupId = 0`.
+- Trigger modes: `all` / `wake-word` / `mention-or-wake` / `private-all-group-mention-or-wake` (default; private always triggers, group requires `isMentioned` or wake word).
+- Wake words are stripped from the prompt before being passed to Agent / commands.
+- Commands are dispatched through `HandlerRegistry` first (synthesizing `GroupMessageEvent` / `PrivateMessageEvent` with a `WechatReplyAdapter`-backed `NapCatApi`), so WeChat reuses the same `@Command` definitions as QQ. If a command matches, the Agent is NOT invoked.
+- Reply path: text + Markdown image + `[IMAGE:url=...]` / `[FILE:path=...]` markers in Agent output are split into separate `sendText` / `sendImage` / `sendFile` REST calls. `AgentWechatSendRequest` uses agent-wechat's `ImageInput {data, mimeType}` / `FileInput {data, filename}` structure (base64), not raw strings.
+- Inbound image vision: WeChat msg type `3` is treated as image. **Private chat only**: `AgentWechatPoller` calls `AgentWechatClient.getMedia(chatId, localId)`, builds a `[图片:data:image/<format>;base64,<data>]` marker plus an explicit instruction "图片已附在本条消息中，不要调用 fetch_url" to prevent the model from trying to fetch an URL. Group images are dropped to avoid noise.
+- `NapCatAgent.extractImageUrls` accepts `http://`, `https://`, and `data:image/` so base64 data URLs flow through the existing vision pipeline.
+- WeChat has no OneBot `BotAdapter`. `AgentDemoBot` checks `napCatApi.isAvailable()` before calling `send_private_forward_msg` / `send_group_forward_msg`, so QQ's tool-process forward is skipped on the WeChat path.
+
 ## Important Code Conventions
 
 - **Annotations for bots**: `@Component` + `@OnGroupMessage` / `@OnPrivateMessage` / `@Command`. Return values are automatically sent as replies.
 - **Tool registration**: Methods annotated with `@Tool` inside Spring `@Component` beans are auto-discovered by `ToolRegistry` in `NapCatAutoConfiguration`.
 - **Role filtering**: Use `@RoleFilter(RoleFilter.Role.SUPERUSER)` for admin-only commands.
 - **Database migrations**: `MigrationManager` in `NapCatAutoConfiguration` runs numbered migrations on startup. New schema changes should be registered there.
-- **Configuration**: See `napcat-admin/src/main/resources/application.yml` for all available options. Key prefixes: `napcat.adapter`, `napcat.bot`, `napcat.llm`, `napcat.agent`, `napcat.memory`, `napcat.scheduler`.
+- **Configuration**: See `napcat-admin/src/main/resources/application.yml` for all available options. Key prefixes: `napcat.qq`, `napcat.wechat`, `napcat.llm`, `napcat.agent`, `napcat.memory`, `napcat.scheduler`, `napcat.core`.
+- **TDD**: Repository follows the test-first workflow. New behavior in `napcat-spring-boot-starter` (especially `wechat/`) lands as a failing test under `src/test/java` before the production change. Use `MockWebServer` for `AgentWechatClient`, and `FakeClient extends AgentWechatClient` for `AgentWechatPoller` tests.

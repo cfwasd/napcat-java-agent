@@ -8,76 +8,27 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 通用核心配置，对应 napcat.* 配置前缀。
+ *
+ * 配置拆分说明：
+ * - napcat.qq.*  → QqProperties（QQ Bot 适配器及 Bot 配置）
+ * - napcat.wechat.* → WeChatProperties（微信 Bot 配置）
+ * - napcat.* 本类保留通用配置（LLM、Agent、Memory、Scheduler、Core）
+ */
 @Data
 @ConfigurationProperties(prefix = "napcat")
 public class NapCatProperties {
 
-    private AdapterProperties adapter = new AdapterProperties();
-    private BotProperties bot = new BotProperties();
+    private CoreProperties core = new CoreProperties();
     private LlmProperties llm = new LlmProperties();
     private AgentProperties agent = new AgentProperties();
     private MemoryProperties memory = new MemoryProperties();
     private SchedulerProperties scheduler = new SchedulerProperties();
-    private CoreProperties core = new CoreProperties();
 
-    @Data
-    public static class AdapterProperties {
-        /** 适配器类型：websocket-client / websocket-server / http-client / http-server */
-        private String type = "websocket-client";
-        private WsClientProperties websocketClient = new WsClientProperties();
-        private WsServerProperties websocketServer = new WsServerProperties();
-        private HttpClientProperties httpClient = new HttpClientProperties();
-        private HttpServerProperties httpServer = new HttpServerProperties();
-    }
-
-    @Data
-    public static class WsClientProperties {
-        private String url = "ws://127.0.0.1:3001";
-        private String token = "";
-        private long reconnectInterval = 5000;
-        private long heartInterval = 30000;
-        private boolean debug = false;
-    }
-
-    @Data
-    public static class WsServerProperties {
-        private String host = "0.0.0.0";
-        private int port = 3001;
-        private String token = "";
-        private boolean debug = false;
-    }
-
-    @Data
-    public static class HttpClientProperties {
-        private String url = "http://127.0.0.1:3000";
-        private String token = "";
-        private long timeout = 30000;
-    }
-
-    @Data
-    public static class HttpServerProperties {
-        private String host = "0.0.0.0";
-        private int port = 8080;
-        private String path = "/napcat/webhook";
-        private String token = "";
-        /** 反向 HTTP Client URL，用于主动调用 NapCat API。为空时仅被动接收上报。 */
-        private String apiUrl = "";
-        /** 反向 HTTP Client Token */
-        private String apiToken = "";
-        /** 反向 HTTP Client 超时（毫秒） */
-        private long apiTimeout = 30000;
-    }
-
-    @Data
-    public static class BotProperties {
-        private long selfId = 0;
-        private String commandPrefix = "";
-        private boolean atMeTrigger = true;
-        private boolean ignoreSelfMessage = true;
-        private List<Long> superUsers = new ArrayList<>();
-        /** 关键词唤醒列表。消息包含任一唤醒词时视为触发，无需 @。默认：["机器人", "bot"] */
-        private List<String> wakeWords = new ArrayList<>(List.of("机器人", "bot"));
-    }
+    // ================================================================
+    // LLM 配置
+    // ================================================================
 
     @Data
     public static class LlmProperties {
@@ -114,6 +65,10 @@ public class NapCatProperties {
         private long timeout = 60000;
     }
 
+    // ================================================================
+    // Agent 配置
+    // ================================================================
+
     @Data
     public static class AgentProperties {
         private boolean enabled = false;
@@ -127,14 +82,16 @@ public class NapCatProperties {
         private int maxHistoryMessages = 50;
         /** 是否启用图片识别功能（如果LLM服务器无法访问QQ图片链接，建议关闭） */
         private boolean enableVision = true;
+        /** 外部技能文件目录，存放 .yaml 技能定义 */
+        private String skillsPath = "skills";
         /** 内置工具开关 */
         private BuiltinToolsProperties builtin = new BuiltinToolsProperties();
         /** 多人格配置列表 */
         private List<PersonaConfig> personas = new ArrayList<>();
         /** 文生图配置 */
-        private NapCatProperties.TextToImageConfig textToImage = new NapCatProperties.TextToImageConfig();
+        private TextToImageConfig textToImage = new TextToImageConfig();
         /** TTS 语音合成配置 */
-        private NapCatProperties.TtsConfig tts = new NapCatProperties.TtsConfig();
+        private TtsConfig tts = new TtsConfig();
 
         /**
          * 获取面向群聊的默认系统提示词（去AI味）
@@ -253,23 +210,12 @@ public class NapCatProperties {
         /**
          * 人格声线映射。key = 声线配置名称，value = 声线参数。
          * 每个人格通过 persona.voiceProfile 字段关联到这里。
-         * 示例配置：
-         * <pre>
-         * voice-profiles:
-         *   lively:
-         *     voice: "alloy"
-         *     speed: 1.2
-         *   gentle:
-         *     voice: "nova"
-         *     speed: 0.9
-         * </pre>
          */
         private Map<String, VoiceProfileConfig> voiceProfiles = new LinkedHashMap<>();
     }
 
     /**
      * 单个声线配置。对应 TTS API 的 voice + speed 参数。
-     * 支持 VoiceCraft 扩展参数 pitch 和 style。
      */
     @Data
     public static class VoiceProfileConfig {
@@ -291,6 +237,10 @@ public class NapCatProperties {
         public ToolToggle(boolean enabled) { this.enabled = enabled; }
     }
 
+    // ================================================================
+    // Memory 配置
+    // ================================================================
+
     @Data
     public static class MemoryProperties {
         /** 是否启用长久记忆 */
@@ -301,6 +251,10 @@ public class NapCatProperties {
         private int extractThreshold = 20;
     }
 
+    // ================================================================
+    // Scheduler 配置
+    // ================================================================
+
     @Data
     public static class SchedulerProperties {
         /** 是否启用定时任务调度 */
@@ -310,6 +264,10 @@ public class NapCatProperties {
         /** 提前注册窗口（毫秒），默认 5 分钟 */
         private long pollWindowMs = 5 * 60 * 1000;
     }
+
+    // ================================================================
+    // Core 配置
+    // ================================================================
 
     @Data
     public static class CoreProperties {

@@ -84,7 +84,19 @@ public class FallbackLlmProvider implements LlmProvider {
             return false;
         }
 
-        // 客户端错误不使用fallback
+        // 图片加载失败可以使用fallback（优先于4xx判断，因为图片问题也可能返回400）
+        if (errorMsg.contains("图片加载失败")
+                || errorMsg.contains("IMAGE data")
+                || errorMsg.contains("image down failed")) {
+            return true;
+        }
+
+        // 认证失败（401/403）不使用fallback
+        if (errorMsg.contains("API请求错误: 401") || errorMsg.contains("API请求错误: 403")) {
+            return false;
+        }
+
+        // 其他客户端错误不使用fallback
         if (errorMsg.contains("API请求错误: 4")) {
             return false;
         }
@@ -95,7 +107,6 @@ public class FallbackLlmProvider implements LlmProvider {
                 || errorMsg.contains("Connection")
                 || errorMsg.contains("ConnectException")
                 || errorMsg.contains("服务器错误: 5")
-                || errorMsg.contains("图片加载失败")
                 || ex instanceof java.net.ConnectException
                 || ex instanceof java.net.SocketTimeoutException;
     }

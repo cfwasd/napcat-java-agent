@@ -87,6 +87,8 @@ public class HelpBot {
         // 其他命令
         sb.append("\n【其他】\n");
         sb.append("/clear — 清空当前会话记忆\n");
+        sb.append("/安静 或 /silent — 开启/关闭群安静模式（3分钟）\n");
+        sb.append("  安静模式下仅此命令可用，权限：普通<管理<群主<超管\n");
 
         return sb.toString().trim();
     }

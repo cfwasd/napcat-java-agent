@@ -160,23 +160,26 @@ public class OpenAiProvider implements LlmProvider {
                         if (!response.isSuccessful()) {
                             int statusCode = response.code();
                             String errorBody = respJson;
-                            
-                            if (statusCode >= 400 && statusCode < 500) {
+
+                            // 图片加载失败检测（优先于状态码判断，因为有些API对图片问题返回400而非500）
+                            boolean isImageLoadError = errorBody.contains("IMAGE data") ||
+                                                      errorBody.contains("loading data ImageData") ||
+                                                      errorBody.contains("image down failed") ||
+                                                      errorBody.contains("multimedia.nt.qq.com.cn") ||
+                                                      errorBody.contains("image_url") ||
+                                                      errorBody.contains("image call") ||
+                                                      errorBody.contains("inspection failed") ||
+                                                      (statusCode == 400 && sessionHasImages(session));
+
+                            if (isImageLoadError) {
+                                log.warn("Image loading failed (status={}) - LLM server cannot access image URLs. Error: {}", statusCode, errorBody);
+                                future.completeExceptionally(new RuntimeException("图片加载失败: LLM服务器无法访问图片链接"));
+                            } else if (statusCode >= 400 && statusCode < 500) {
                                 log.warn("OpenAI API client error ({}): {}", statusCode, errorBody);
                                 future.completeExceptionally(new RuntimeException("API请求错误: " + statusCode));
                             } else {
-                                // 检查是否是图片加载失败的错误
-                                boolean isImageLoadError = errorBody.contains("IMAGE data") || 
-                                                          errorBody.contains("loading data ImageData") ||
-                                                          errorBody.contains("multimedia.nt.qq.com.cn");
-                                
-                                if (isImageLoadError) {
-                                    log.warn("Image loading failed - LLM server cannot access QQ image URLs. Error: {}", errorBody);
-                                    future.completeExceptionally(new RuntimeException("图片加载失败: LLM服务器无法访问QQ图片链接"));
-                                } else {
-                                    log.error("OpenAI API server error ({}): {}", statusCode, errorBody);
-                                    future.completeExceptionally(new RuntimeException("服务器错误: " + statusCode));
-                                }
+                                log.error("OpenAI API server error ({}): {}", statusCode, errorBody);
+                                future.completeExceptionally(new RuntimeException("服务器错误: " + statusCode));
                             }
                             return;
                         }
@@ -193,6 +196,20 @@ public class OpenAiProvider implements LlmProvider {
         }
 
         return future;
+    }
+
+    /**
+     * 检查 session 历史中是否包含图片消息。
+     * 用于在 400 错误时判断是否可能是图片导致的（兜底检测）。
+     */
+    private boolean sessionHasImages(Session session) {
+        if (session == null) return false;
+        for (com.napcat.agent.llm.ChatMessage msg : session.getHistory()) {
+            if (msg.getImageUrls() != null && !msg.getImageUrls().isEmpty()) {
+                return true;
+            }
+        }
+        return false;
     }
 
 

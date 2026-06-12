@@ -68,6 +68,9 @@ public class AgentDemoBot {
     @Autowired(required = false)
     private VoicePreferenceStore voicePreferenceStore;
 
+    @Autowired(required = false)
+    private com.napcat.core.group.GroupPreferenceStore groupPreferenceStore;
+
     private static  List<String> keyboards;
 
     @PostConstruct
@@ -347,6 +350,72 @@ public class AgentDemoBot {
         event.reply("语音模式已切换为：" + targetMode.toDisplayString());
     }
 
+    // ==================== 安静模式 ====================
+
+    /**
+     * /安静 或 /silent —— 开启/关闭群聊安静模式（3分钟）
+     * 安静模式下，仅 /安静（/silent）命令可执行，其余消息全部忽略。
+     * 权限优先级：普通人(0) < 管理员(1) < 群主(2) < 超管(3)
+     * 关闭权限：发起人 或 同级/更高级用户可关闭。
+     */
+    @Command(value = "/安静", description = "开启/关闭安静模式（3分钟）", silentModeAllowed = true)
+    @Command(value = "/silent", description = "开启/关闭安静模式（3分钟）", silentModeAllowed = true)
+    @OnGroupMessage
+    public String silentMode(GroupMessageEvent event) {
+        if (groupPreferenceStore == null) {
+            return "安静模式功能未启用";
+        }
+
+        long groupId = event.getGroupId();
+        long userId = event.getUserId();
+        int userPriority = resolvePriority(event);
+
+        // 检查当前是否已有安静模式
+        com.napcat.core.group.GroupPreferenceStore.SilentInfo existing =
+                groupPreferenceStore.getSilentInfo(groupId);
+
+        if (existing != null && !existing.isExpired()) {
+            // 已有安静模式 → 尝试关闭
+            com.napcat.core.group.GroupPreferenceStore.DeactivateResult result =
+                    groupPreferenceStore.deactivateSilent(groupId, userId, userPriority);
+            return switch (result) {
+                case SUCCESS -> String.format("🔊 安静模式已关闭（剩余 %d 秒被取消）", existing.getRemainingSeconds());
+                case NO_PERMISSION -> String.format("🔒 安静模式由 %s 激活，你的权限不足，无法关闭\n⏳ 剩余 %d 秒",
+                        com.napcat.core.group.GroupPreferenceStore.SilentInfo.priorityName(existing.priorityLevel),
+                        existing.getRemainingSeconds());
+                case NOT_ACTIVE -> "当前没有活跃的安静模式";
+            };
+        }
+
+        // 没有安静模式 → 开启
+        boolean activated = groupPreferenceStore.activateSilent(groupId, userId, userPriority, 0);
+        if (activated) {
+            return String.format("🤫 安静模式已开启（3分钟），期间仅 /安静 命令可用\n⏳ %s 已激活",
+                    com.napcat.core.group.GroupPreferenceStore.SilentInfo.priorityName(userPriority));
+        }
+        return "开启安静模式失败";
+    }
+
+    /**
+     * 解析用户在群中的优先级等级。
+     */
+    private int resolvePriority(GroupMessageEvent event) {
+        // 超级管理员（最高优先级）
+        if (botProperties.getSuperUsers().contains(event.getUserId())) {
+            return com.napcat.core.group.GroupPreferenceStore.PRIORITY_SUPERUSER;
+        }
+        // 群主
+        if (event.getSender() != null && event.getSender().isOwner()) {
+            return com.napcat.core.group.GroupPreferenceStore.PRIORITY_OWNER;
+        }
+        // 管理员
+        if (event.getSender() != null && event.getSender().isAdmin()) {
+            return com.napcat.core.group.GroupPreferenceStore.PRIORITY_ADMIN;
+        }
+        // 普通成员
+        return com.napcat.core.group.GroupPreferenceStore.PRIORITY_NORMAL;
+    }
+
     /**
      * 发送回复：先处理图片标记，再根据语音模式决定是否发送语音。
      */
@@ -454,7 +523,7 @@ public class AgentDemoBot {
     private void sendProcessForward(GroupMessageEvent event, List<String> processSteps) {
         if (processSteps == null || processSteps.isEmpty()) return;
         // 优先使用 raw API 方式发送（更可靠）
-        if (napCatApi != null) {
+        if (napCatApi != null && napCatApi.isAvailable()) {
             try {
                 sendForwardViaRawApi(event.getGroupId(), 0, processSteps);
                 return;
@@ -487,7 +556,7 @@ public class AgentDemoBot {
     private void sendProcessForwardPrivate(PrivateMessageEvent event, List<String> processSteps) {
         if (processSteps == null || processSteps.isEmpty()) return;
         // 优先使用 raw API
-        if (napCatApi != null) {
+        if (napCatApi != null && napCatApi.isAvailable()) {
             try {
                 sendForwardViaRawApi(0, event.getUserId(), processSteps);
                 return;

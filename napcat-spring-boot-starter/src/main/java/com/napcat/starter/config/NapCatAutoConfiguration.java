@@ -15,13 +15,18 @@ import com.napcat.core.handler.EventDispatcher;
 import com.napcat.core.handler.HandlerRegistry;
 import com.napcat.core.scheduler.*;
 import com.napcat.core.tts.VoicePreferenceStore;
+import com.napcat.core.group.GroupPreferenceStore;
 import com.napcat.agent.memory.*;
 import com.napcat.agent.scheduler.TaskExecutor;
 import com.napcat.agent.scheduler.ScheduleTool;
 import com.napcat.starter.adapter.HttpServerAdapter;
+import com.napcat.starter.wechat.AgentWechatClient;
+import com.napcat.starter.wechat.AgentWechatPoller;
+import com.napcat.starter.wechat.WechatIdMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -29,6 +34,9 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.ComponentScan;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executor;
@@ -38,7 +46,7 @@ import java.util.concurrent.TimeUnit;
 
 @Slf4j
 @AutoConfiguration
-@EnableConfigurationProperties(NapCatProperties.class)
+@EnableConfigurationProperties({NapCatProperties.class, QqProperties.class, WechatProperties.class})
 @ComponentScan("com.napcat")
 public class NapCatAutoConfiguration {
 
@@ -50,7 +58,7 @@ public class NapCatAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    public BotProperties botProperties(NapCatProperties props) {
+    public BotProperties botProperties(QqProperties props) {
         BotProperties bp = new BotProperties();
         bp.setSelfId(props.getBot().getSelfId());
         bp.setCommandPrefix(props.getBot().getCommandPrefix());
@@ -62,37 +70,37 @@ public class NapCatAutoConfiguration {
     }
 
     // ================================================================
-    // Adapter
+    // Adapter (QQ Bot)
     // ================================================================
 
     @Bean
     @ConditionalOnMissingBean
-    @ConditionalOnProperty(prefix = "napcat.adapter", name = "type", havingValue = "websocket-client", matchIfMissing = true)
-    public BotAdapter wsClientBotAdapter(NapCatProperties props, ObjectMapper mapper) {
+    @ConditionalOnExpression("${napcat.qq.enabled:true} and '${napcat.qq.adapter.type:websocket-client}' == 'websocket-client'")
+    public BotAdapter wsClientBotAdapter(QqProperties props, ObjectMapper mapper) {
         var c = props.getAdapter().getWebsocketClient();
         return new WsClientAdapter(c.getUrl(), c.getToken(), c.getReconnectInterval(), mapper);
     }
 
     @Bean
     @ConditionalOnMissingBean
-    @ConditionalOnProperty(prefix = "napcat.adapter", name = "type", havingValue = "http-client")
-    public BotAdapter httpClientBotAdapter(NapCatProperties props, ObjectMapper mapper) {
+    @ConditionalOnExpression("${napcat.qq.enabled:true} and '${napcat.qq.adapter.type:http-client}' == 'http-client'")
+    public BotAdapter httpClientBotAdapter(QqProperties props, ObjectMapper mapper) {
         var c = props.getAdapter().getHttpClient();
         return new HttpClientAdapter(c.getUrl(), c.getToken(), c.getTimeout(), mapper);
     }
 
     @Bean
     @ConditionalOnMissingBean
-    @ConditionalOnProperty(prefix = "napcat.adapter", name = "type", havingValue = "websocket-server")
-    public BotAdapter wsServerBotAdapter(NapCatProperties props, ObjectMapper mapper) {
+    @ConditionalOnExpression("${napcat.qq.enabled:true} and '${napcat.qq.adapter.type:websocket-server}' == 'websocket-server'")
+    public BotAdapter wsServerBotAdapter(QqProperties props, ObjectMapper mapper) {
         var c = props.getAdapter().getWebsocketServer();
         return new WsServerAdapter(c.getHost(), c.getPort(), c.getToken(), mapper);
     }
 
     @Bean
     @ConditionalOnMissingBean
-    @ConditionalOnProperty(prefix = "napcat.adapter", name = "type", havingValue = "http-server")
-    public BotAdapter httpServerBotAdapter(NapCatProperties props, ObjectMapper mapper) {
+    @ConditionalOnExpression("${napcat.qq.enabled:true} and '${napcat.qq.adapter.type:http-server}' == 'http-server'")
+    public BotAdapter httpServerBotAdapter(QqProperties props, ObjectMapper mapper) {
         var c = props.getAdapter().getHttpServer();
         return new HttpServerAdapter(mapper,
                 c.getPath(), c.getToken(),
@@ -111,14 +119,21 @@ public class NapCatAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "napcat.qq", name = "enabled", havingValue = "true", matchIfMissing = true)
     public MessageRouter messageRouter(ObjectMapper mapper, NapCatApi api) {
         return new MessageRouter(mapper, api);
     }
 
     @Bean
     @ConditionalOnMissingBean
-    public HandlerRegistry handlerRegistry(BotProperties botProperties) {
-        return new HandlerRegistry(botProperties);
+    public HandlerRegistry handlerRegistry(BotProperties botProperties,
+                                           ObjectProvider<GroupPreferenceStore> groupPrefStoreProvider) {
+        HandlerRegistry registry = new HandlerRegistry(botProperties);
+        GroupPreferenceStore groupPrefStore = groupPrefStoreProvider.getIfAvailable();
+        if (groupPrefStore != null) {
+            registry.setSilentModeChecker(groupPrefStore::isSilent);
+        }
+        return registry;
     }
 
     @Bean
@@ -151,23 +166,20 @@ public class NapCatAutoConfiguration {
     @ConditionalOnMissingBean
     public ToolRegistry toolRegistry(ApplicationContext ctx) {
         ToolRegistry registry = new ToolRegistry();
-        // 扫描所有 Bean，检查是否有方法标注了 @Tool（@Tool 是 METHOD 级别注解）
         for (String name : ctx.getBeanDefinitionNames()) {
             try {
                 Object bean = ctx.getBean(name);
                 Class<?> clazz = bean.getClass();
-                // 跳过 CGLIB 代理，取原始类
                 while (clazz.getName().contains("$$")) {
                     clazz = clazz.getSuperclass();
                 }
                 for (java.lang.reflect.Method method : clazz.getDeclaredMethods()) {
                     if (method.isAnnotationPresent(com.napcat.core.annotation.Tool.class)) {
                         registry.register(bean);
-                        break;  // 一个 bean 只注册一次
+                        break;
                     }
                 }
             } catch (Exception ignored) {
-                // 跳过无法获取的 bean（如某些框架内部 bean）
             }
         }
         log.info("ToolRegistry initialized with {} tools", registry.getSchemas().size());
@@ -199,12 +211,11 @@ public class NapCatAutoConfiguration {
             throw new IllegalStateException("No LlmProvider bean found. Please add a provider dependency like napcat-llm-openai.");
         }
 
-        // 如果启用了备用模型，创建 FallbackLlmProvider
         if (props.getLlm().getFallback().isEnabled()) {
             LlmProvider fallbackProvider = createFallbackProvider(props);
             if (fallbackProvider != null) {
                 provider = new com.napcat.agent.llm.FallbackLlmProvider(provider, fallbackProvider, true);
-                log.info("✅ Fallback LLM provider enabled: primary -> {}", 
+                log.info("Fallback LLM provider enabled: primary -> {}",
                         props.getLlm().getFallback().getProvider());
             }
         }
@@ -215,14 +226,12 @@ public class NapCatAutoConfiguration {
                 props.getAgent().getSystemPrompt(), props.getAgent().getMaxReactRounds(),
                 props.getAgent().isEnableVision());
 
-        // 注入 PersonaManager
         PersonaManager pm = personaManagerProvider.getIfAvailable();
         if (pm != null) {
             agent.setPersonaManager(pm);
             log.info("PersonaManager injected into NapCatAgent, {} personas loaded", pm.size());
         }
 
-        // 注入 TextToImageTool 配置
         TextToImageTool textToImageTool = ctx.getBeanProvider(TextToImageTool.class).getIfAvailable();
         if (textToImageTool != null) {
             var t2i = props.getAgent().getTextToImage();
@@ -235,37 +244,31 @@ public class NapCatAutoConfiguration {
         return agent;
     }
 
-    /**
-     * 创建备用 LLM Provider
-     */
     private LlmProvider createFallbackProvider(NapCatProperties props) {
         var fallback = props.getLlm().getFallback();
         String providerType = fallback.getProvider().toLowerCase();
-        
+
         try {
             return switch (providerType) {
                 case "openai", "custom" -> createOpenAiProvider(fallback);
                 case "anthropic" -> createAnthropicProvider(fallback);
                 case "ollama" -> createOllamaProvider(fallback);
                 default -> {
-                    log.warn("❌ Unknown fallback provider type: {}", providerType);
+                    log.warn("Unknown fallback provider type: {}", providerType);
                     yield null;
                 }
             };
         } catch (Exception e) {
-            log.error("❌ Failed to create fallback LLM provider: {}", providerType, e);
+            log.error("Failed to create fallback LLM provider: {}", providerType, e);
             return null;
         }
     }
 
-    /**
-     * 通过反射创建 OpenAI Provider（避免循环依赖）
-     */
     private LlmProvider createOpenAiProvider(NapCatProperties.FallbackProviderConfig config) {
         try {
             Class<?> clazz = Class.forName("com.napcat.llm.openai.OpenAiProvider");
             return (LlmProvider) clazz.getConstructor(
-                    String.class, String.class, String.class, 
+                    String.class, String.class, String.class,
                     int.class, double.class, long.class
             ).newInstance(
                     config.getBaseUrl(),
@@ -284,9 +287,6 @@ public class NapCatAutoConfiguration {
         }
     }
 
-    /**
-     * 通过反射创建 Anthropic Provider（避免循环依赖）
-     */
     private LlmProvider createAnthropicProvider(NapCatProperties.FallbackProviderConfig config) {
         try {
             Class<?> clazz = Class.forName("com.napcat.llm.anthropic.AnthropicProvider");
@@ -310,9 +310,6 @@ public class NapCatAutoConfiguration {
         }
     }
 
-    /**
-     * 通过反射创建 Ollama Provider（避免循环依赖）
-     */
     private LlmProvider createOllamaProvider(NapCatProperties.FallbackProviderConfig config) {
         try {
             Class<?> clazz = Class.forName("com.napcat.llm.ollama.OllamaProvider");
@@ -374,26 +371,21 @@ public class NapCatAutoConfiguration {
     @ConditionalOnMissingBean
     public MigrationManager migrationManager(DbManager dbManager) {
         MigrationManager mm = new MigrationManager(dbManager);
-        // 注册 schedules + memories 表
         mm.register(1, "create schedules table", ScheduleStore.ddl());
         mm.register(2, "create memories table", SqliteMemoryStore.memoriesDdl());
-        // 为已有任务设置默认 created_by（如果为空）
-        mm.register(3, "set default created_by for existing schedules", 
+        mm.register(3, "set default created_by for existing schedules",
                 "UPDATE schedules SET created_by = 0 WHERE created_by IS NULL");
-        // 为 schedules 表添加 is_recurring 字段
         mm.register(4, "add is_recurring column to schedules",
                 "ALTER TABLE schedules ADD COLUMN is_recurring INTEGER DEFAULT 1");
-        // 创建 memory_summaries 表（每日归纳）
         mm.register(5, "create memory_summaries table", SqliteMemoryStore.summariesDdl());
-        // 添加索引优化查询
         mm.register(6, "create memory indexes",
                 "CREATE INDEX IF NOT EXISTS idx_memories_user_group ON memories(user_id, group_id);" +
                 "CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at);" +
                 "CREATE INDEX IF NOT EXISTS idx_summaries_user_group_date ON memory_summaries(user_id, group_id, summary_date);");
         mm.register(7, "create user_preferences table", VoicePreferenceStore.ddl());
+        mm.register(8, "create group_preferences table", GroupPreferenceStore.ddl());
         mm.migrate();
 
-        // 确保已有数据库的列结构最新（兼容旧数据库）
         mm.ensureColumn("schedules", "is_recurring", "INTEGER DEFAULT 1");
         mm.ensureColumn("schedules", "created_by", "INTEGER DEFAULT 0");
         mm.ensureColumn("memories", "type", "TEXT DEFAULT 'summary'");
@@ -419,7 +411,7 @@ public class NapCatAutoConfiguration {
 
     @Bean(name = "napcatTaskExecutor")
     @ConditionalOnMissingBean(name = "napcatTaskExecutor")
-    @ConditionalOnProperty(prefix = "napcat.scheduler", name = "enabled", havingValue = "true", matchIfMissing = true)
+    @ConditionalOnExpression("${napcat.qq.enabled:true} and ${napcat.scheduler.enabled:true}")
     public TaskExecutor taskExecutor(NapCatApi api, ObjectProvider<NapCatAgent> agentProvider,
                                       ObjectProvider<DailyMemorySummarizer> summarizerProvider) {
         return new TaskExecutor(api, agentProvider.getIfAvailable(), summarizerProvider);
@@ -463,7 +455,7 @@ public class NapCatAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    @ConditionalOnProperty(prefix = "napcat.scheduler", name = "enabled", havingValue = "true", matchIfMissing = true)
+    @ConditionalOnExpression("${napcat.qq.enabled:true} and ${napcat.scheduler.enabled:true}")
     public SchedulePoller schedulePoller(ScheduleStore store, TimerWheel timerWheel,
                                           @org.springframework.beans.factory.annotation.Qualifier("napcatTaskExecutor") TaskExecutor executor, NapCatProperties props) {
         SchedulePoller poller = new SchedulePoller(store, timerWheel, executor::execute,
@@ -491,7 +483,6 @@ public class NapCatAutoConfiguration {
         cfg.setDefaultVoice(ttsCfg.getDefaultVoice());
         cfg.setTimeout(ttsCfg.getTimeout());
         cfg.setMaxTextLength(ttsCfg.getMaxTextLength());
-        // 转换声线配置
         if (ttsCfg.getVoiceProfiles() != null) {
             for (var entry : ttsCfg.getVoiceProfiles().entrySet()) {
                 TtsService.VoiceProfile vp = new TtsService.VoiceProfile();
@@ -511,6 +502,61 @@ public class NapCatAutoConfiguration {
         return new VoicePreferenceStore(dbManager);
     }
 
+    @Bean
+    @ConditionalOnMissingBean
+    public GroupPreferenceStore groupPreferenceStore(DbManager dbManager) {
+        return new GroupPreferenceStore(dbManager);
+    }
+
+    // ================================================================
+    // WeChat (agent-wechat REST API)
+    // ================================================================
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "napcat.wechat", name = "enabled", havingValue = "true")
+    public WechatIdMapper wechatIdMapper() {
+        return new WechatIdMapper();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "napcat.wechat", name = "enabled", havingValue = "true")
+    public AgentWechatClient agentWechatClient(WechatProperties props, ObjectMapper mapper) {
+        return new AgentWechatClient(props.getApiBaseUrl(), resolveWechatToken(props),
+                Duration.ofMillis(props.getApiTimeout()), mapper);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnExpression("${napcat.wechat.enabled:false} and ${napcat.agent.enabled:false}")
+    public AgentWechatPoller agentWechatPoller(AgentWechatClient client, WechatIdMapper mapper,
+                                               WechatProperties wechatProps, NapCatAgent agent,
+                                               HandlerRegistry handlerRegistry) {
+        return new AgentWechatPoller(client, mapper, wechatProps,
+                (userId, groupId, prompt) -> agent.chat(userId, groupId, prompt), handlerRegistry);
+    }
+
+    private String resolveWechatToken(WechatProperties props) {
+        if (props.getToken() != null && !props.getToken().isBlank()) {
+            return props.getToken().trim();
+        }
+        String tokenFile = props.getTokenFile();
+        if (tokenFile == null || tokenFile.isBlank()) {
+            return "";
+        }
+        String expanded = tokenFile.replace("${user.home}", System.getProperty("user.home"));
+        try {
+            Path path = Path.of(expanded);
+            if (Files.exists(path)) {
+                return Files.readString(path).trim();
+            }
+        } catch (Exception e) {
+            log.warn("Failed to read agent-wechat token file: {}", expanded, e);
+        }
+        return "";
+    }
+
     // ================================================================
     // 后处理器 + 生命周期
     // ================================================================
@@ -521,6 +567,7 @@ public class NapCatAutoConfiguration {
     }
 
     @Bean
+    @ConditionalOnProperty(prefix = "napcat.qq", name = "enabled", havingValue = "true", matchIfMissing = true)
     public NapCatLifecycle napCatLifecycle(List<BotAdapter> adapters, EventDispatcher dispatcher,
                                            NapCatApi api, HandlerRegistry registry,
                                            MessageRouter messageRouter,

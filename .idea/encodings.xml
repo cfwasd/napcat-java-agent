@@ -15,6 +15,8 @@
     <file url="file://$PROJECT_DIR$/napcat-llm-providers/napcat-llm-openai/src/main/resources" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/napcat-spring-boot-starter/src/main/java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/napcat-spring-boot-starter/src/main/resources" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/napcat-wechat/src/main/java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/napcat-wechat/src/main/resources" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/src/main/java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/src/main/resources" charset="UTF-8" />
   </component>

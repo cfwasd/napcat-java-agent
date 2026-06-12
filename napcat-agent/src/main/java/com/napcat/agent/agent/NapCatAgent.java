@@ -161,6 +161,35 @@ public class NapCatAgent {
      * 工具清单确保即使模型 function-calling 能力弱，也能从文本中了解可用工具。
      */
     /**
+     * 遍历异常链，提取完整错误信息。
+     * FallbackLlmProvider 会包装原始异常，导致 ex.getMessage() 丢失根因信息。
+     */
+    private static String extractFullErrorMessage(Throwable ex) {
+        StringBuilder sb = new StringBuilder();
+        Throwable current = ex;
+        while (current != null) {
+            if (current.getMessage() != null) {
+                if (sb.length() > 0) sb.append(" | ");
+                sb.append(current.getMessage());
+            }
+            current = current.getCause();
+        }
+        return sb.length() > 0 ? sb.toString() : null;
+    }
+
+    /**
+     * 清除 session 历史中所有消息的图片 URL，避免后续请求因图片加载失败而持续报错。
+     */
+    private static void clearImageUrls(Session session) {
+        for (ChatMessage msg : session.getHistory()) {
+            if (msg.getImageUrls() != null && !msg.getImageUrls().isEmpty()) {
+                log.debug("[Agent] Clearing image URLs from session message: role={}", msg.getRole());
+                msg.setImageUrls(null);
+            }
+        }
+    }
+
+    /**
      * 从用户输入文本中提取图片 URL（[图片:xxx] 格式）。只保留 http/https 协议的可访问地址。
      */
     private static java.util.List<String> extractImageUrls(String input) {
@@ -171,10 +200,10 @@ public class NapCatAgent {
         while (matcher.find()) {
             String url = matcher.group(1).trim();
             if (url.isEmpty()) continue;
-            if (url.startsWith("http://") || url.startsWith("https://")) {
+            if (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("data:image/")) {
                 urls.add(url);
             } else {
-                log.warn("[Agent] Ignoring non-HTTP image URL from NapCat: {}", url);
+                log.warn("[Agent] Ignoring unsupported image URL: {}", url);
             }
         }
         if (!urls.isEmpty()) {
@@ -297,32 +326,44 @@ public class NapCatAgent {
                     }
                 })
                 .exceptionally(ex -> {
-                    String errorMsg = ex.getMessage();
-                    
+                    // 遍历异常链提取完整错误信息（FallbackLlmProvider 会包装原始异常）
+                    String errorMsg = extractFullErrorMessage(ex);
+
                     if (errorMsg != null) {
+                        // 图片加载失败检测（优先于参数错误，因为图片问题也会返回400）
+                        if (errorMsg.contains("图片加载失败") || errorMsg.contains("IMAGE data")
+                                || errorMsg.contains("image down failed")
+                                || errorMsg.contains("multimedia.nt.qq.com.cn")) {
+                            log.warn("[Agent] Image loading failed in round {}. LLM cannot access image URLs.", round);
+                            // 清除 session 中的图片 URL，避免后续请求继续失败
+                            clearImageUrls(session);
+                            String imageErrorMsg = "我看到你发了图片，但是我这边的AI服务器无法直接访问QQ的图片链接😅\n你可以描述一下图片内容，我来帮你分析~";
+                            session.addMessage(new ChatMessage("assistant", imageErrorMsg, null));
+                            return imageErrorMsg;
+                        }
+
+                        if (errorMsg.contains("API请求错误: 401") || errorMsg.contains("API请求错误: 403")) {
+                            log.warn("[Agent] API auth error in round {}: {}", round, ex.getMessage());
+                            String clientErrMsg = "API认证失败，请检查配置。";
+                            session.addMessage(new ChatMessage("assistant", clientErrMsg, null));
+                            return clientErrMsg;
+                        }
+
                         if (errorMsg.contains("API请求错误: 4")) {
                             log.warn("[Agent] API client error in round {}: {}", round, ex.getMessage());
                             String clientErrMsg = "请求参数有误，请检查输入内容或稍后重试。";
                             session.addMessage(new ChatMessage("assistant", clientErrMsg, null));
                             return clientErrMsg;
                         }
-                        
-                        if (errorMsg.contains("图片加载失败") || errorMsg.contains("IMAGE data") 
-                                || errorMsg.contains("multimedia.nt.qq.com.cn")) {
-                            log.warn("[Agent] Image loading failed in round {}. LLM cannot access QQ image URLs.", round);
-                            String imageErrorMsg = "我看到你发了图片，但是我这边的AI服务器无法直接访问QQ的图片链接😅\n你可以描述一下图片内容，我来帮你分析~";
-                            session.addMessage(new ChatMessage("assistant", imageErrorMsg, null));
-                            return imageErrorMsg;
-                        }
-                        
-                        if (errorMsg.contains("timeout") || errorMsg.contains("SocketTimeoutException") 
+
+                        if (errorMsg.contains("timeout") || errorMsg.contains("SocketTimeoutException")
                                 || errorMsg.contains("timed out")) {
                             log.warn("[Agent] Request timeout in round {}. The API server may be slow or unreachable.", round);
                             String timeoutMsg = "哎呀，网络有点卡，服务器响应超时了😅 要不再试一次？";
                             session.addMessage(new ChatMessage("assistant", timeoutMsg, null));
                             return timeoutMsg;
                         }
-                        
+
                         if (errorMsg.contains("Connection refused") || errorMsg.contains("ConnectException")) {
                             log.warn("[Agent] Connection failed in round {}: {}", round, ex.getMessage());
                             String connMsg = "网络连接失败了，可能是服务器暂时不可用😔";
@@ -330,7 +371,7 @@ public class NapCatAgent {
                             return connMsg;
                         }
                     }
-                    
+
                     log.error("[Agent] Error in round {}", round, ex);
                     String fallbackMsg = "处理出错了，请稍后再试。";
                     session.addMessage(new ChatMessage("assistant", fallbackMsg, null));

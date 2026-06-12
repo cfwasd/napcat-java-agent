@@ -28,13 +28,18 @@ mvn install -DskipTests
 
 ```yaml
 napcat:
-  adapter:
-    type: websocket-client
-    websocket-client:
-      url: ws://127.0.0.1:3001
-      token: ""
-  bot:
-    self-id: 123456789
+  qq:
+    enabled: true
+    adapter:
+      type: websocket-client
+      websocket-client:
+        url: ws://127.0.0.1:3001
+        token: ""
+    bot:
+      self-id: 123456789
+      command-prefix: ""
+      wake-words:
+        - 小助手
 ```
 
 ### 3. 在 napcat-admin 中编写 Bot
@@ -80,6 +85,71 @@ public class HelloBot {
 
 ---
 
+## 微信接入（agent-wechat REST API）
+
+微信通过 [agent-wechat](https://github.com/thisnick/agent-wechat) 容器接入：先在另一台/同一台机器部署 agent-wechat 并扫码登录，napcat-java 通过 REST API 轮询消息并发送回复。
+
+### 1. 启动 agent-wechat
+
+参考其官方文档（Docker 容器，默认端口 `6174`）：
+
+```bash
+wx up
+wx auth login
+```
+
+记录生成的 token：`/root/.config/agent-wechat/token`。
+
+### 2. 配置微信
+
+在 `napcat-admin/src/main/resources/application.yml`：
+
+```yaml
+napcat:
+  wechat:
+    enabled: true
+    api-base-url: http://127.0.0.1:6174
+    token: ${AGENT_WECHAT_TOKEN:}              # 优先用 token；为空时读 token-file
+    token-file: ${AGENT_WECHAT_TOKEN_FILE:${user.home}/.config/agent-wechat/token}
+    api-timeout: 30000
+    poll-interval-ms: 1000
+    chat-limit: 50
+    message-limit: 20
+    reply-to-group-messages: true
+    ignore-self-messages: true
+    trigger-mode: private-all-group-mention-or-wake
+    wake-words:
+      - emiya
+      - 小助手
+```
+
+### 3. 行为说明
+
+- **触发策略**
+  - 私聊：默认全部消息都触发 Agent；
+  - 群聊：必须 @ 机器人或包含唤醒词才触发；
+  - 关键词命中后会从传给 Agent 的内容中**去掉关键词**。
+- **命令分发**：微信消息会先按现有 `@Command` 注解尝试匹配（与 QQ 共用同一套命令体系），命令未命中再交给 Agent。命令前缀沿用 `napcat.qq.bot.command-prefix`。
+- **启动行为**：`AgentWechatPoller.start()` 时只把当前消息标记为已读，不会把启动前的历史消息再回复一遍。
+- **图片识别**
+  - 私聊单图自动识图，`AgentWechatPoller` 调用 agent-wechat `getMedia(chatId, localId)` 取出 base64，拼成 `[图片:data:image/png;base64,...]` 走现有 `enable-vision` 多模态链路；
+  - 群聊不识图，避免噪声。
+- **发送能力**：文本、图片（URL 自动下载、本地路径、base64）、文件（本地路径、base64）。
+- **不可用项**：微信通道无 OneBot raw API，因此 QQ 的"思考过程合并转发"在微信下自动跳过；当前未接入 TTS 语音发送。
+
+### 4. 路径映射注意
+
+agent-wechat 容器只能读到挂载到容器内的路径（默认 `/data` 或 `/home/wechat`）。
+
+如果给 agent-wechat 的 `image` / `file` 字段是本地路径，确保：
+
+- Java 进程能读到该文件；
+- agent-wechat 容器**不需要**直接读这个路径——`AgentWechatClient` 已经把文件读成 bytes 后 base64 上传，无需共享文件系统。
+
+如果用 HTTP/HTTPS URL，napcat-java 会先下载再上传 base64，所以也无需让 agent-wechat 直接访问该 URL。
+
+---
+
 ## 文档
 
 在线文档站：https://cfwasd.github.io/napcat-java-agent/
@@ -100,6 +170,7 @@ public class HelloBot {
 
 ## 功能特性
 
+- **多协议接入**：QQ 走 NapCat OneBot11；微信走 [agent-wechat](https://github.com/thisnick/agent-wechat) REST API（轮询拉聊天/消息，支持文本/图片/文件发送）
 - **全协议通信**：支持 HTTP Server / Client、WebSocket Server / Client 四种 NapCat 通信方式
 - **双编程模型**：注解式（`@OnGroupMessage`、`@Command`）与接口式（`EventHandler`、`CommandHandler`）并存
 - **OneBot11 完整模型**：消息链（MessageChain）、事件、API 请求/响应全覆盖；支持 array / string（CQ 码）双格式上报解析
@@ -107,7 +178,7 @@ public class HelloBot {
 - **多人格角色系统**：内置 5 种人格（默认/傲娇/学者/逗比/知心姐姐），群友可通过 `/persona` 命令随时切换，每个人独立设置
 - **TTS 语音回复**：集成 VoiceCraft（免费 Edge TTS），支持人格声线映射，50% 概率随机触发语音（可切换纯文字/纯语音/默认模式）
 - **文生图（DALL·E/商汤）**：Agent 支持通过 `text_to_image` 工具生成图片，NapCat 原生支持直接发送图片 URL，无需下载
-- **多模态理解**：`MessageChain.toAgentPrompt()` 保留图片、语音、视频等富文本标记；OpenAI Provider 自动将 `[图片:url]` 提取为 `image_url` 多模态消息；LLM 回复中的 Markdown 图片 `![alt](url)` 自动识别并发送
+- **多模态理解**：`MessageChain.toAgentPrompt()` 保留图片、语音、视频等富文本标记；OpenAI Provider 自动将 `[图片:url]` 提取为 `image_url` 多模态消息；LLM 回复中的 Markdown 图片 `![alt](url)` 自动识别并发送；微信私聊单图自动调用 agent-wechat `getMedia` 拼成 `data:image/...;base64` 走 vision 链路（群聊不识图）
 - **多 LLM 后端**：OpenAI 协议兼容（含多模态/vision）、Anthropic Claude、Ollama 本地模型、自定义 OpenAI 端点
 - **LLM 备用模型**：主模型失败时自动切换到备用模型，支持 openai / anthropic / ollama / custom
 - **Spring Boot 开箱即用**：`napcat-spring-boot-starter` 自动配置，高度可配置化
