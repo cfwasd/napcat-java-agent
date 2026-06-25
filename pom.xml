@@ -21,6 +21,7 @@
         <module>napcat-spring-boot-starter</module>
         <module>napcat-admin</module>
         <module>dingdong-channel-api</module>
+        <module>dingdong-qqofficial</module>
     </modules>
 
     <properties>
@@ -80,6 +81,11 @@
             <dependency>
                 <groupId>com.napcat</groupId>
                 <artifactId>dingdong-channel-api</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.napcat</groupId>
+                <artifactId>dingdong-qqofficial</artifactId>
                 <version>${project.version}</version>
             </dependency>
 
