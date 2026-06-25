@@ -18,6 +18,10 @@
             <artifactId>napcat-core</artifactId>
         </dependency>
         <dependency>
+            <groupId>com.napcat</groupId>
+            <artifactId>dingdong-channel-api</artifactId>
+        </dependency>
+        <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
         </dependency>

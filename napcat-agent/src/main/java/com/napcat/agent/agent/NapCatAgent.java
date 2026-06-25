@@ -1,5 +1,6 @@
 package com.napcat.agent.agent;
 
+import com.napcat.agent.core.AgentEngine;
 import com.napcat.agent.llm.ChatMessage;
 import com.napcat.agent.llm.LlmProvider;
 import com.napcat.agent.llm.LlmResponse;
@@ -29,6 +30,7 @@ public class NapCatAgent {
     private final int defaultMaxRounds;
     private final boolean enableVision;
     private PersonaManager personaManager;
+    private final AgentEngine agentEngine;
 
     public NapCatAgent(LlmProvider llmProvider, ToolRegistry toolRegistry, SessionManager sessionManager,
                        String defaultSystemPrompt, int defaultMaxRounds) {
@@ -53,6 +55,8 @@ public class NapCatAgent {
         this.defaultSystemPrompt = defaultSystemPrompt;
         this.defaultMaxRounds = defaultMaxRounds;
         this.enableVision = enableVision;
+        this.agentEngine = new AgentEngine(llmProvider, toolRegistry,
+                AgentConfig.builder().maxRounds(defaultMaxRounds).build());
     }
 
     private MemoryExtractor getMemoryExtractor() {
@@ -269,6 +273,20 @@ public class NapCatAgent {
     }
 
     private CompletableFuture<String> reactLoop(Session session, AgentConfig config, int round,
+                                                 Consumer<String> toolProcessConsumer) {
+        // 委托给 AgentEngine 执行核心 ReAct 循环
+        // 注意：AgentEngine 不包含记忆提取和错误处理逻辑，此处保留完整实现
+        return doReactLoop(session, config, round, toolProcessConsumer);
+    }
+
+    /**
+     * 实际的 ReAct 循环实现。
+     * 与 AgentEngine.reactLoop 逻辑一致，但保留了：
+     * - 记忆提取（MemoryExtractor）
+     * - 详细的错误分类处理（图片加载失败、认证错误、超时等）
+     * - 工具执行过程回调
+     */
+    private CompletableFuture<String> doReactLoop(Session session, AgentConfig config, int round,
                                                  Consumer<String> toolProcessConsumer) {
         if (round >= config.getMaxRounds()) {
             String msg = "思考次数过多，请简化问题。";
