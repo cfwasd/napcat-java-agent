@@ -6,6 +6,7 @@ export default defineConfig({
   description: '基于 NapCat OneBot11 协议 + QQ 官方 API v2 的 Java Bot 开发框架，集成 AI Agent 能力',
   lang: 'zh-CN',
   base: '/dingdong-bot/',
+  ignoreDeadLinks: true,
 
   head: [
     ['link', { rel: 'icon', type: 'image/svg+xml', href: '/logo.svg' }],

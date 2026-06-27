@@ -192,7 +192,7 @@ public class AgentBot {
 
 ## 微信接入
 
-通过 [agent-wechat](https://github.com/thisnick/agent-wechat) 容器接入微信。详见 [README 微信接入章节](../README.md#微信接入)。
+通过 [agent-wechat](https://github.com/thisnick/agent-wechat) 容器接入微信。详见项目根目录 [README.md](../README.md#微信接入) 或在线文档站。
 
 ---
 
