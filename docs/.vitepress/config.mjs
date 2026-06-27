@@ -2,10 +2,10 @@ import { defineConfig } from 'vitepress'
 
 // https://vitepress.dev/reference/site-config
 export default defineConfig({
-  title: 'NapCat Java SDK',
-  description: '基于 NapCat OneBot11 协议的 Java Bot 开发框架，集成 AI Agent 能力',
+  title: '叮咚 Bot',
+  description: '基于 NapCat OneBot11 协议 + QQ 官方 API v2 的 Java Bot 开发框架，集成 AI Agent 能力',
   lang: 'zh-CN',
-  base: '/napcat-java-agent/',
+  base: '/dingdong-bot/',
 
   head: [
     ['link', { rel: 'icon', type: 'image/svg+xml', href: '/logo.svg' }],
@@ -37,7 +37,7 @@ export default defineConfig({
     ],
 
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/cfwasd/napcat-java-agent' },
+      { icon: 'github', link: 'https://github.com/cfwasd/dingdong-bot' },
     ],
 
     footer: {
@@ -71,7 +71,7 @@ export default defineConfig({
     },
 
     editLink: {
-      pattern: 'https://github.com/cfwasd/napcat-java-agent/edit/main/docs/:path',
+      pattern: 'https://github.com/cfwasd/dingdong-bot/edit/main/docs/:path',
       text: '在 GitHub 上编辑此页',
     },
 
