@@ -1,12 +1,48 @@
 # 事件与消息模型
 
-本文档描述框架对 OneBot11 协议的事件（Event）和消息（Message）的封装。
+本文档描述框架对事件和消息的封装，涵盖 NapCat OneBot11 协议和 QQ 官方 API v2 两种渠道。
 
 ---
 
-## 一、事件体系
+## 一、渠道抽象
 
-所有事件继承 `OB11Event`，位于 `com.napcat.core.event`。
+框架通过 **Channel API** 统一抽象不同渠道：
+
+```java
+// 所有渠道事件的基类
+public interface ChannelEvent {
+    String getChannelId();          // "qqofficial" / "napcat"
+    long getUserId();
+    long getGroupId();
+    String getPlainText();
+}
+
+// 消息事件（含回复能力）
+public interface ChannelMessageEvent extends ChannelEvent {
+    ChannelMessageTarget getMessageTarget();
+    Object getApi();                 // 渠道专用 API
+    String getRawContent();         // 原始消息内容（@ 信息等）
+    List<Long> getMentions();       // 被 @ 的用户列表
+}
+```
+
+Bot 方法统一使用 `ChannelEvent` 参数，即可在双渠道复用：
+
+```java
+@OnGroupMessage
+@OnPrivateMessage
+@Command("/签到")
+public String checkin(ChannelEvent event) {
+    // 无需关心是哪个渠道
+    return checkInService.doCheckin(event.getUserId());
+}
+```
+
+---
+
+## 二、NapCat (OneBot11) 事件体系
+
+所有事件继承 `OB11Event`，位于 `com.dingdong.core.event`。
 
 ```
 OB11Event
@@ -14,198 +50,86 @@ OB11Event
 │   ├── GroupMessageEvent
 │   └── PrivateMessageEvent
 ├── NoticeEvent
-│   ├── GroupIncreaseEvent      // 群成员增加
-│   ├── GroupDecreaseEvent      // 群成员减少
-│   ├── GroupAdminEvent         // 群管理员变动
-│   ├── GroupBanEvent           // 群禁言
-│   ├── FriendAddEvent          // 好友添加
-│   ├── GroupRecallEvent        // 群消息撤回
-│   ├── FriendRecallEvent       // 好友消息撤回
-│   ├── GroupUploadEvent        // 群文件上传
-│   ├── NotifyEvent             // 通知（戳一戳等）
-│   ├── LuckyKingEvent          // 运气王
-│   ├── HonorEvent              // 群荣誉
-│   └── GroupTitleEvent         // 群头衔变更
+│   ├── GroupIncreaseEvent
+│   ├── GroupDecreaseEvent
+│   ├── GroupAdminEvent
+│   ├── GroupBanEvent
+│   ├── FriendAddEvent
+│   ├── GroupRecallEvent
+│   ├── FriendRecallEvent
+│   ├── GroupUploadEvent
+│   ├── NotifyEvent
+│   ├── LuckyKingEvent
+│   ├── HonorEvent
+│   └── GroupTitleEvent
 ├── RequestEvent
-│   ├── FriendRequestEvent      // 好友请求
-│   └── GroupRequestEvent       // 群请求（加群/邀请）
+│   ├── FriendRequestEvent
+│   └── GroupRequestEvent
 └── MetaEvent
-    ├── LifecycleEvent          // 生命周期
-    └── HeartbeatEvent          // 心跳
+    ├── LifecycleEvent
+    └── HeartbeatEvent
 ```
 
-### 1.1 通用属性
+### MessageEvent
 
 ```java
-@Data
-@JsonIgnoreProperties(ignoreUnknown = true)
-public abstract class OB11Event {
-    @JsonProperty("time")
-    private long time;              // 事件时间戳
-
-    @JsonProperty("self_id")
-    private long selfId;            // 收到事件的机器人 QQ 号
-
-    @JsonProperty("post_type")
-    private String postType;        // 事件类型标识
-}
-```
-
-### 1.2 MessageEvent
-
-```java
-@Data
-@JsonIgnoreProperties(ignoreUnknown = true)
 public abstract class MessageEvent extends OB11Event {
-    @JsonProperty("message_id")
-    private int messageId;          // 消息 ID
+    private int messageId;
+    private long userId;
+    private MessageChain message;
+    private String rawMessage;
+    private Sender sender;
 
-    @JsonProperty("user_id")
-    private long userId;            // 发送者 QQ
-
-    @JsonProperty("message")
-    private MessageChain message;   // 消息内容
-
-    @JsonProperty("raw_message")
-    private String rawMessage;      // 原始消息文本
-
-    @JsonProperty("sender")
-    private Sender sender;          // 发送者信息
-
-    /** 回复纯文本 */
     public void reply(String text);
-
-    /** 回复消息链 */
     public void reply(MessageChain chain);
-
-    /** 获取纯文本（去掉 @、图片等） */
     public String getPlainText();
 }
 ```
 
-### 1.3 GroupMessageEvent
+### GroupMessageEvent
 
 ```java
-@Data
-@JsonIgnoreProperties(ignoreUnknown = true)
 public class GroupMessageEvent extends MessageEvent {
-    @JsonProperty("group_id")
-    private long groupId;           // 群号
-
-    @JsonProperty("sub_type")
-    private String subType;         // normal / anonymous / notice
-
-    @JsonProperty("message_seq")
-    private long messageSeq;        // 消息序号
-
-    @JsonProperty("anonymous")
-    private Anonymous anonymous;    // 匿名信息（如有）
-
-    public boolean isAnonymous();
-}
-```
-
-### 1.4 PrivateMessageEvent
-
-```java
-@Data
-@JsonIgnoreProperties(ignoreUnknown = true)
-public class PrivateMessageEvent extends MessageEvent {
-    @JsonProperty("sub_type")
-    private String subType;         // friend / group / other
-}
-```
-
-### 1.5 RequestEvent
-
-```java
-// 好友请求
-@Data
-public class FriendRequestEvent extends RequestEvent {
-    @JsonProperty("user_id")
-    private long userId;
-    @JsonProperty("comment")
-    private String comment;         // 验证消息
-    @JsonProperty("flag")
-    private String flag;            // 请求标识
-}
-
-// 群请求
-@Data
-public class GroupRequestEvent extends RequestEvent {
-    @JsonProperty("group_id")
     private long groupId;
-    @JsonProperty("user_id")
-    private long userId;
-    @JsonProperty("sub_type")
-    private String subType;         // add / invite
-    @JsonProperty("comment")
-    private String comment;
-    @JsonProperty("flag")
-    private String flag;
+    private String subType;
+    private long messageSeq;
+    private Anonymous anonymous;
 }
 ```
 
 ---
 
-## 二、消息链（MessageChain）
+## 三、消息链（MessageChain）
 
-OneBot11 的消息是**段（Segment）数组**，框架将其封装为 `MessageChain`。
+OneBot11 的消息是**段（Segment）数组**，框架封装为 `MessageChain`。支持 array / string（CQ 码）双格式反序列化。
 
-`MessageChain` 实现了 `List<MessageSegment>`，支持 array / string（CQ 码）双格式反序列化。
-
-### 2.1 基础用法
+### 构造消息链
 
 ```java
-// 构造消息链（链式调用）
 MessageChain chain = MessageChain.ofText("你好")
     .at(123456789L)
     .text("看看这个")
     .image("https://example.com/pic.jpg")
     .reply(event.getMessageId());
 
-// 发送
 event.reply(chain);
 ```
 
-### 2.2 静态工厂方法
+### 静态工厂方法
 
 ```java
 MessageChain.of(MessageSegment segment)
 MessageChain.ofText(String text)
 MessageChain.ofAt(long qq)
-MessageChain.ofAtAll()
-MessageChain.ofFace(int id)
 MessageChain.ofImage(String file)
 MessageChain.ofRecord(String file)
-MessageChain.ofVideo(String file)
-MessageChain.ofFile(String file, String name)
 MessageChain.ofReply(int messageId)
 MessageChain.ofMarkdown(String content)
 MessageChain.ofJson(String data)
-MessageChain.ofXml(String data)
 MessageChain.ofForward(List<NodeSegment> nodes)
 ```
 
-### 2.3 链式实例方法
-
-```java
-chain.text(String)
-chain.at(long)
-chain.atAll()
-chain.face(int)
-chain.image(String)
-chain.record(String)
-chain.video(String)
-chain.file(String, String)
-chain.reply(int)
-chain.markdown(String)
-chain.json(String)
-chain.xml(String)
-chain.forward(List<NodeSegment>)
-```
-
-### 2.4 消息段类型
+### 消息段类型
 
 | OneBot11 类型 | 说明 |
 |--------------|------|
@@ -219,105 +143,72 @@ chain.forward(List<NodeSegment>)
 | `reply` | 回复某条消息 |
 | `markdown` | Markdown 消息 |
 | `json` | JSON 卡片 |
-| `xml` | XML 消息 |
 | `node` | 合并转发节点 |
 | `forward` | 合并转发 |
 
-### 2.5 从事件解析
+### 从事件解析
 
 ```java
 @OnGroupMessage
 public void onGroup(GroupMessageEvent event) {
     MessageChain msg = event.getMessage();
 
-    // 遍历消息段
     for (MessageSegment segment : msg) {
-        if (segment instanceof TextSegment text) {
-            System.out.println("文本：" + text.getText());
-        } else if (segment instanceof ImageSegment img) {
-            System.out.println("图片：" + img.getUrl());
-        } else if (segment instanceof AtSegment at) {
-            System.out.println("@了：" + at.getQq());
-        }
+        if (segment instanceof TextSegment text) { }
+        else if (segment instanceof ImageSegment img) { }
+        else if (segment instanceof AtSegment at) { }
     }
 
-    // 快捷判断
-    if (msg.containsImage()) { }
-    if (msg.isAt(123456789L)) { }
-    if (msg.isAtAll()) { }
-
-    // 提取纯文本（去掉 @、图片等）
     String plain = msg.toPlainText();
-
-    // 提取所有图片 URL（优先取 url，无 url 取 file）
     List<String> images = msg.getImages();
-
-    // 提取被 @ 的 QQ 列表（过滤 @全体成员）
     List<Long> ats = msg.getAts();
+    String agentPrompt = msg.toAgentPrompt();  // 带 [图片:url] 标记
 }
 ```
 
-### 2.6 反序列化
+---
 
-框架根据 NapCat 上报的 `message` 字段自动反序列化为 `MessageChain`。支持两种格式：
+## 四、API 客户端
 
-**array 格式（推荐）：**
-
-```json
-[
-  { "type": "text", "data": { "text": "你好 " } },
-  { "type": "at", "data": { "qq": "123456789" } },
-  { "type": "image", "data": { "file": "https://example.com/pic.jpg" } }
-]
-```
-
-**string 格式（CQ 码）：**
-
-```json
-"[CQ:at,qq=123456789] 你好"
-```
-
-通过 `napcat.core.message-post-format` 配置上报格式，框架自动兼容解析。CQ 码支持完整的段类型映射，解析失败会降级为 `UnknownSegment`。
-
-### 2.7 生成 Agent 提示文本
-
-`MessageChain.toAgentPrompt()` 生成适合传给 LLM Agent 的文本描述，保留图片、表情、@ 等富文本信息：
+### NapCat API
 
 ```java
-String prompt = event.getMessage().toAgentPrompt();
-// 纯文本消息：与 toPlainText() 一致
-// 含图片消息："你好 [图片:https://xxx.jpg] 看看这个"
-// 含 @ 消息："你好 [@123456789] 在吗"
-// 含表情："[表情:277]"
+@Autowired
+private NapCatApi api;
+
+api.sendGroupMessage(123456789L, "Hello");
+api.sendPrivateMessage(111111111L, "Hello");
+api.deleteMessage(12345);
+api.getLoginInfo();
 ```
 
-Agent 会自动识别 `[图片:url]` 标记，将 HTTP/HTTPS 图片地址提取为多模态 `image_url` 消息发送给支持 vision 的模型（如 gpt-4o）。
+完整 API 列表涵盖 OneBot11 所有标准接口及 NapCat 扩展接口（精华消息、群公告、文件管理、OCR、翻译等）。
+
+### QQ 官方 API
+
+QQ 官方渠道通过 `ChannelMessageEvent.getApi()` 获取渠道专用 API，支持 Markdown + 键盘按钮等能力：
+
+```java
+// 发送 Markdown 消息
+api.reply(markdownContent);
+
+// 发送 Markdown + 按钮面板
+api.replyWithKeyboard(markdownContent, keyboardJson);
+```
 
 ---
 
-## 三、Sender 信息
+## 五、Sender 信息
 
 ```java
-@Data
 public class Sender {
-    @JsonProperty("user_id")
     private long userId;
-    @JsonProperty("nickname")
     private String nickname;
-    @JsonProperty("sex")
-    private String sex;           // male / female / unknown
-    @JsonProperty("age")
+    private String sex;
     private int age;
-    @JsonProperty("card")
-    private String card;          // 群名片
-    @JsonProperty("area")
-    private String area;
-    @JsonProperty("level")
-    private String level;         // 等级
-    @JsonProperty("role")
-    private String role;          // owner / admin / member
-    @JsonProperty("title")
-    private String title;         // 专属头衔
+    private String card;         // 群名片
+    private String role;         // owner / admin / member
+    private String title;        // 专属头衔
 
     public boolean isAdmin();
     public boolean isOwner();
@@ -326,120 +217,11 @@ public class Sender {
 
 ---
 
-## 四、API 请求与响应
-
-框架封装了 OneBot11 的 HTTP API 调用，核心类为 `NapCatApi`。
-
-### 4.1 API 客户端
+## 六、事件上下文（EventContext）
 
 ```java
-@Autowired
-private NapCatApi api;
-
-// 发送群消息
-api.sendGroupMessage(123456789L, "Hello");
-
-// 发送带消息链的群消息
-api.sendGroupMessage(123456789L, MessageChain.ofAt(111L).text("你好"));
-
-// 发送私聊消息
-api.sendPrivateMessage(111111111L, "Hello");
-
-// 撤回消息
-api.deleteMessage(12345);
-
-// 获取登录信息
-api.getLoginInfo();
+EventContext ctx = EventContextHolder.get();
+ctx.getAttrs().put("key", value);
 ```
 
-### 4.2 完整 API 列表
-
-所有方法返回 `CompletableFuture<ApiResponse>`。
-
-| 方法 | 对应 OneBot11 API |
-|------|------------------|
-| `sendPrivateMessage` | `send_private_msg` |
-| `sendGroupMessage` | `send_group_msg` |
-| `sendMessage` | `send_msg` |
-| `deleteMessage` | `delete_msg` |
-| `getMessage` | `get_msg` |
-| `getForwardMsg` | `get_forward_msg` |
-| `sendLike` | `send_like` |
-| `setGroupKick` | `set_group_kick` |
-| `setGroupBan` | `set_group_ban` |
-| `setGroupWholeBan` | `set_group_whole_ban` |
-| `setGroupAdmin` | `set_group_admin` |
-| `setGroupCard` | `set_group_card` |
-| `setGroupName` | `set_group_name` |
-| `setGroupLeave` | `set_group_leave` |
-| `setGroupSpecialTitle` | `set_group_special_title` |
-| `setGroupPortrait` | `set_group_portrait` |
-| `setFriendAddRequest` | `set_friend_add_request` |
-| `setGroupAddRequest` | `set_group_add_request` |
-| `getLoginInfo` | `get_login_info` |
-| `getStrangerInfo` | `get_stranger_info` |
-| `getFriendList` | `get_friend_list` |
-| `getGroupInfo` | `get_group_info` |
-| `getGroupList` | `get_group_list` |
-| `getGroupMemberInfo` | `get_group_member_info` |
-| `getGroupMemberList` | `get_group_member_list` |
-| `getGroupHonorInfo` | `get_group_honor_info` |
-| `getCookies` | `get_cookies` |
-| `getCsrfToken` | `get_csrf_token` |
-| `getCredentials` | `get_credentials` |
-| `getRecord` | `get_record` |
-| `getImage` | `get_image` |
-| `canSendImage` | `can_send_image` |
-| `canSendRecord` | `can_send_record` |
-| `getStatus` | `get_status` |
-| `getVersionInfo` | `get_version_info` |
-| `setRestart` | `set_restart` |
-| `cleanCache` | `clean_cache` |
-
-### 4.3 NapCat 扩展 API
-
-| 方法 | 说明 |
-|------|------|
-| `setEssenceMessage` | 设置精华消息 |
-| `deleteEssenceMessage` | 移除精华消息 |
-| `getEssenceMessageList` | 获取精华消息列表 |
-| `sendGroupNotice` | 发送群公告 |
-| `getGroupNotice` | 获取群公告 |
-| `uploadGroupFile` | 上传群文件 |
-| `deleteGroupFile` | 删除群文件 |
-| `getGroupFileSystemInfo` | 获取群文件系统信息 |
-| `getGroupRootFiles` | 获取群根目录文件 |
-| `getGroupFilesByFolder` | 获取群文件夹内文件 |
-| `setSelfPortrait` | 设置自身头像 |
-| `getGuildList` | 获取频道列表 |
-| `getGuildMemberList` | 获取频道成员列表 |
-| `sendGuildMessage` | 发送频道消息 |
-| `getAiVoice` | AI 语音生成 |
-| `getAiRecord` | AI 语音转换 |
-| `ocrImage` | OCR 图片识别 |
-| `translate` | 翻译 |
-| `arkSharePeer` | 发送 Ark 分享 |
-
----
-
-## 五、事件上下文（EventContext）
-
-框架在处理事件时维护一个线程本地上下文：
-
-```java
-@Data
-public class EventContext {
-    private final OB11Event event;           // 当前事件
-    private final NapCatApi api;             // API 客户端
-    private final Map<String, Object> attrs = new HashMap<>(); // 扩展属性
-}
-
-// 使用
-@OnGroupMessage
-public void handle(GroupMessageEvent event) {
-    EventContext ctx = EventContextHolder.get();
-    ctx.getAttrs().put("key", value);
-}
-```
-
-上下文在同一线程内有效。跨线程（如 Agent 异步回调）时，`MessageEvent` 自身持有 `api` 引用，可直接调用 `event.reply()`。
+上下文在同一线程内有效。跨线程（如 Agent 异步回调）时，`MessageEvent` 自身持有 `api` 引用。

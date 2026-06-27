@@ -1,12 +1,12 @@
 # 编程模型
 
-框架同时支持**注解驱动**和**接口驱动**两种编程模型，两者最终汇入同一路由表，行为完全一致。
+框架同时支持**注解驱动**和**接口驱动**两种编程模型，两者最终汇入同一路由表，行为完全一致。所有 Bot 方法在 QQ 官方渠道和 NapCat 渠道均可复用。
 
 ---
 
 ## 一、注解驱动
 
-所有注解位于包 `com.napcat.core.annotation` 下。
+所有注解位于包 `com.dingdong.core.annotation` 下。
 
 ### 1.1 事件监听注解
 
@@ -14,23 +14,10 @@
 
 | 注解 | 适用参数类型 | 说明 |
 |------|------------|------|
-| `@OnGroupMessage` | `GroupMessageEvent` | 群聊消息事件 |
-| `@OnPrivateMessage` | `PrivateMessageEvent` | 私聊消息事件 |
+| `@OnGroupMessage` | `GroupMessageEvent` / `ChannelEvent` | 群聊消息事件 |
+| `@OnPrivateMessage` | `PrivateMessageEvent` / `ChannelEvent` | 私聊消息事件 |
 
-> **注意**：`@OnNotice`、`@OnRequest`、`@OnMetaEvent` 注解已定义，但当前注解驱动模型暂未实现对应的事件分发逻辑。通知、请求、元事件请通过接口驱动模型的 `EventHandler` 处理（见下文 2.1 节）。
-
-**源码定义：**
-
-```java
-public @interface OnGroupMessage {
-    long[] botId() default {};
-    int priority() default 100;     // 数值越小优先级越高
-}
-
-public @interface OnPrivateMessage {
-    int priority() default 100;
-}
-```
+> **注意**：`@OnNotice`、`@OnRequest`、`@OnMetaEvent` 注解已定义，但当前注解驱动模型暂未实现对应的事件分发逻辑。通知、请求、元事件请通过接口驱动模型的 `EventHandler` 处理。
 
 **示例：**
 
@@ -84,7 +71,7 @@ public @interface Command {
 - 叠加在事件注解上时，表示**同时满足**（AND 关系）
 - 消息必须匹配命令模板，参数用 `{}` 包裹
 - 不匹配的参数化命令会继续向下路由
-- 实际匹配时会在模板前拼接 `napcat.bot.command-prefix`（默认为空字符串）
+- 实际匹配时会在模板前拼接 `dingdong.qq.bot.command-prefix`（默认为空字符串）
 
 **示例：**
 
@@ -93,7 +80,6 @@ public @interface Command {
 public class CommandBot {
 
     // 匹配："/天气 北京"
-    // 不匹配："/天气"（缺少 city）、"/帮助"
     @OnGroupMessage
     @Command("/天气 {city}")
     public void weather(GroupMessageEvent event, @Param("city") String city) {
@@ -122,27 +108,6 @@ public void ban(GroupMessageEvent event,
 }
 ```
 
-`CommandArgs` 实际支持的方法：
-
-```java
-public class CommandArgs {
-    public String get(String key);
-    public int getInt(String key);
-    public long getLong(String key);
-    public boolean getBoolean(String key);  // "true"/"1"/"yes" 为 true
-    public boolean contains(String key);
-}
-```
-
-**特殊参数类型：**
-
-| 参数类型 | 提取方式 |
-|---------|---------|
-| `String` | 原文提取 |
-| `int` / `long` / `double` | 自动转换 |
-| `boolean` | "true"/"1"/"yes" 为 true |
-| `GroupMessageEvent` / `MessageEvent` | 注入事件对象本身 |
-
 ---
 
 ### 1.3 过滤注解
@@ -155,29 +120,6 @@ public class CommandArgs {
 | `@RoleFilter(Role.ADMIN)` | 要求发送者是指定角色 | 管理员命令 |
 | `@WakeFilter` | 要求消息包含配置的唤醒词 | 关键词唤醒 |
 
-**源码定义：**
-
-```java
-public @interface MentionFilter {
-    int priority() default 10;
-}
-
-public @interface RoleFilter {
-    Role value();
-    int priority() default 10;
-    enum Role { OWNER, ADMIN, MEMBER, SUPERUSER }
-}
-
-/**
- * 关键词唤醒过滤器。
- * 唤醒词列表在 napcat.bot.wake-words 中配置，默认包含 ["机器人", "bot"]。
- * 与 @MentionFilter 同时标注时取 AND 语义（需同时满足才触发）。
- */
-public @interface WakeFilter {
-    int priority() default 10;
-}
-```
-
 **示例：**
 
 ```java
@@ -188,16 +130,14 @@ public void onAtMe(GroupMessageEvent event) {
     event.reply("你叫我？");
 }
 
-// 管理员或超级用户才能执行（群聊和私聊均生效）
+// 管理员或超级用户才能执行
 @OnGroupMessage
 @OnPrivateMessage
 @Command("/清理")
 @RoleFilter(RoleFilter.Role.SUPERUSER)
-public void clear(MessageEvent event) {
-    // ...
-}
+public void clear(MessageEvent event) { }
 
-// 消息包含"机器人"或"bot"时触发
+// 消息包含唤醒词时触发
 @OnGroupMessage
 @WakeFilter
 public void onWake(GroupMessageEvent event) {
@@ -207,21 +147,33 @@ public void onWake(GroupMessageEvent event) {
 
 ---
 
-### 1.4 参数注入注解
+### 1.4 渠道兼容写法
 
-用于命令方法的参数上。
+推荐同时标注 `@OnGroupMessage` 和 `@OnPrivateMessage`，并使用 `ChannelEvent` 作为参数类型，使方法同时在 QQ 官方和 NapCat 渠道生效：
 
 ```java
-public @interface Param {
-    String value();
+@OnGroupMessage
+@OnPrivateMessage
+@Command("/签到")
+public String checkin(ChannelEvent event) {
+    long userId = resolveUserId(event);
+    // 渠道无关的业务逻辑
+    return checkInService.doCheckin(userId);
+}
+
+// QQ 官方渠道可以额外返回 Markdown + 按钮面板
+@OnGroupMessage
+@OnPrivateMessage
+@Command("/修仙面板")
+public String cultivationPanel(ChannelEvent event) {
+    if ("qqofficial".equals(event.getChannelId())) {
+        // 发送 Markdown + 按钮面板
+        return sendWithKeyboard(event, markdown, keyboardJson);
+    }
+    // 其他渠道返回纯文本
+    return buildPlainText();
 }
 ```
-
-| 注解 | 说明 |
-|------|------|
-| `@Param("name")` | 从命令模板中提取对应参数 |
-
----
 
 ### 1.5 Agent 相关注解
 
@@ -229,22 +181,6 @@ public @interface Param {
 |------|------|
 | `@Tool` | 标记一个方法为 Agent 可调用的工具 |
 | `@ToolParam` | 标记工具参数的描述和约束 |
-
-**源码定义：**
-
-```java
-public @interface Tool {
-    String name();
-    String description();
-}
-
-public @interface ToolParam {
-    String description();
-    boolean required() default false;
-    String[] enums() default {};
-    String type() default "string";
-}
-```
 
 **@Tool 示例：**
 
@@ -263,54 +199,36 @@ public class Tools {
     public double calculate(
         @ToolParam(description = "表达式，如 1+2") String expression
     ) {
-        // ...
         return 3.0;
     }
 }
 ```
 
----
-
 ### 1.6 组合注解（Meta-Annotation）
 
-框架支持自定义组合注解。定义时将框架注解作为元注解即可，框架会通过递归收集元注解实现组合效果。
-
-> **注意**：框架仅递归收集元注解，不处理 Spring 的 `@AliasFor` 属性转发。组合注解上的自定义属性不会自动映射到被组合注解的对应属性。
-
-**自定义示例：**
+框架支持自定义组合注解。定义时将框架注解作为元注解即可：
 
 ```java
 @Target(ElementType.METHOD)
 @Retention(RetentionPolicy.RUNTIME)
 @OnGroupMessage
 @MentionFilter
-public @interface OnGroupAtMe {
-}
+public @interface OnGroupAtMe { }
 
 @Target(ElementType.METHOD)
 @Retention(RetentionPolicy.RUNTIME)
 @Command
 @RoleFilter(RoleFilter.Role.ADMIN)
 public @interface AdminCommand {
-    String value();  // 此属性不会通过 @AliasFor 映射到 @Command.value()
+    String value();
 }
-```
-
-**使用：**
-
-```java
-@OnGroupAtMe
-public void handleAt(GroupMessageEvent event) { }
-
-@AdminCommand("/踢出 {user}")  // 框架会识别出 @Command 和 @RoleFilter，但 value 需通过代码另行处理
-public void kick(GroupMessageEvent event, @Param("user") long userId) { }
 ```
 
 ---
 
 ## 二、接口驱动
 
-所有接口位于包 `com.napcat.core.handler` 下。
+所有接口位于包 `com.dingdong.core.handler` 下。
 
 ### 2.1 通用事件处理器
 
@@ -319,19 +237,8 @@ public interface EventHandler<E extends OB11Event> {
     Class<E> getEventType();
     void handle(E event);
 
-    interface GroupMessageHandler extends EventHandler<GroupMessageEvent> {
-        @Override
-        default Class<GroupMessageEvent> getEventType() {
-            return GroupMessageEvent.class;
-        }
-    }
-
-    interface PrivateMessageHandler extends EventHandler<PrivateMessageEvent> {
-        @Override
-        default Class<PrivateMessageEvent> getEventType() {
-            return PrivateMessageEvent.class;
-        }
-    }
+    interface GroupMessageHandler extends EventHandler<GroupMessageEvent> { }
+    interface PrivateMessageHandler extends EventHandler<PrivateMessageEvent> { }
 }
 ```
 
@@ -349,8 +256,6 @@ public class WelcomeHandler implements EventHandler.GroupMessageHandler {
 }
 ```
 
----
-
 ### 2.2 命令处理器
 
 ```java
@@ -359,95 +264,16 @@ public interface CommandHandler {
     void handle(MessageEvent event, CommandArgs args);
 
     interface FilterableCommandHandler extends CommandHandler {
-        default boolean filter(MessageEvent event) {
-            return true;
-        }
+        default boolean filter(MessageEvent event) { return true; }
     }
 }
 ```
-
-**示例：**
-
-```java
-@Component
-public class WeatherHandler implements CommandHandler {
-    @Override
-    public String getCommand() {
-        return "/天气 {city}";
-    }
-
-    @Override
-    public void handle(MessageEvent event, CommandArgs args) {
-        String city = args.get("city");
-        event.reply(city + " 天气晴朗");
-    }
-}
-```
-
-**带过滤的命令处理器：**
-
-```java
-@Component
-public class AdminClearHandler implements CommandHandler.FilterableCommandHandler {
-    @Override
-    public String getCommand() {
-        return "/清理";
-    }
-
-    @Override
-    public boolean filter(MessageEvent event) {
-        return event.getSender().isAdmin();
-    }
-
-    @Override
-    public void handle(MessageEvent event, CommandArgs args) {
-        // ...
-    }
-}
-```
-
----
 
 ### 2.3 手动注册器
-
-如果不想用 Spring 的 `@Component` 自动扫描，也可以通过接口手动注册。
 
 ```java
 public interface BotInitializer {
     void initialize(BotDispatcher dispatcher);
-}
-
-public interface BotDispatcher {
-    void onGroupMessage(Consumer<GroupMessageEvent> handler);
-    void onPrivateMessage(Consumer<PrivateMessageEvent> handler);
-    void onEvent(Class<? extends OB11Event> type, Consumer<OB11Event> handler);
-    void registerCommand(String template, BiConsumer<MessageEvent, CommandArgs> handler);
-    void registerCommand(String template, BiConsumer<MessageEvent, CommandArgs> handler,
-                         Predicate<MessageEvent> filter);
-}
-```
-
-**示例：**
-
-```java
-@Component
-public class ManualBot implements BotInitializer {
-    @Override
-    public void initialize(BotDispatcher dispatcher) {
-        dispatcher.onGroupMessage(event -> {
-            if (event.getMessage().toPlainText().contains("测试")) {
-                event.reply("收到测试");
-            }
-        });
-
-        dispatcher.registerCommand("/状态", (event, args) -> {
-            event.reply("运行正常");
-        });
-
-        dispatcher.registerCommand("/管理", (event, args) -> {
-            event.reply("管理员命令");
-        }, event -> event.getSender().isAdmin());
-    }
 }
 ```
 
@@ -462,6 +288,7 @@ public class ManualBot implements BotInitializer {
 | `void` | 无操作 |
 | `String` | 自动回复文本 |
 | `MessageChain` | 自动回复消息链 |
+| `null` | 不回复（用于已手动回复的场景） |
 
 **示例：**
 
@@ -486,20 +313,10 @@ public MessageChain image() {
 框架提供全局异常处理器。方法内抛出 `StopRoutingException` 可阻止后续处理器执行：
 
 ```java
-public class StopRoutingException extends RuntimeException {
-    public StopRoutingException() {
-        super("Stop routing");
-    }
-}
-```
-
-**示例：**
-
-```java
 @OnGroupMessage
 public void filterSpam(GroupMessageEvent event) {
     if (isSpam(event)) {
-        throw new StopRoutingException(); // 不执行后续 handler
+        throw new StopRoutingException();
     }
 }
 ```
@@ -510,7 +327,7 @@ public void filterSpam(GroupMessageEvent event) {
 
 ### 5.1 路由优先级
 
-框架按**优先级数值从小到大**依次匹配并执行（数值越小越先执行）。每个方法可能叠加多个注解，最终优先级取**所有注解 priority 的最小值**：
+框架按**优先级数值从小到大**依次匹配并执行。每个方法可能叠加多个注解，最终优先级取**所有注解 priority 的最小值**：
 
 | 优先级数值 | 注解组合 | 说明 |
 |-----------|---------|------|
@@ -520,22 +337,6 @@ public void filterSpam(GroupMessageEvent event) {
 | 10 | `@RoleFilter` | 默认 10，可通过 `priority()` 自定义 |
 | 100 | `@OnGroupMessage` / `@OnPrivateMessage` | 默认 100，可通过 `priority()` 自定义 |
 
-**示例：** 一个方法同时标注 `@Command(priority=5)` 和 `@OnGroupMessage(priority=50)`，最终优先级取最小值 `5`。
+### 5.2 阻止后续路由
 
-同一优先级的处理器按**注册顺序**执行。
-
-### 5.2 同一优先级的排序
-
-通过 Spring 的 `@Order` 控制：
-
-```java
-@Component
-@Order(1)  // 数值越小优先级越高
-public class HighPriorityHandler { }
-```
-
-### 5.3 阻止后续路由
-
-默认情况下，匹配的处理器会**顺序执行**。抛出 `StopRoutingException` 才会阻止后续处理器执行（见上文）。
-
-**命令匹配特殊行为：** 命令匹配成功后，框架默认**直接返回**，不再执行后续注解 handler 和接口 handler。只有当命令 handler 内部抛出 `StopRoutingException` 时才会正常中断。
+默认情况下，匹配的处理器会**顺序执行**。抛出 `StopRoutingException` 才会阻止后续处理器执行。命令匹配成功后，框架默认**直接返回**，不再执行后续 handler。

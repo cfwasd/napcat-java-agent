@@ -1,353 +1,204 @@
 # 配置参考
 
-所有配置项通过 `application.yml` 或 `application.properties` 设置，前缀为 `napcat`。
-
-配置类源码：`com.napcat.starter.config.NapCatProperties`
+所有配置项通过 `application.yml` 设置，前缀为 `dingdong`。
 
 ---
 
 ## 完整配置示例
 
+完整的示例配置见项目根目录 `dingdong-admin/src/main/resources/application.example.yml`，此处列出关键配置块。
+
+### QQ 官方渠道
+
 ```yaml
-napcat:
-  # ========== 通信适配器 ==========
-  adapter:
-    # 类型：websocket-client / websocket-server / http-client / http-server
-    type: websocket-client
+dingdong:
+  qq-official:
+    enabled: true
+    app-id: "YOUR_APP_ID"
+    app-secret: ${QQ_OFFICIAL_SECRET:YOUR_SECRET}
+    sandbox: true                     # 测试环境用 true，正式发布改为 false
+    trigger-mode: all                 # all / wake-word / mention-or-wake
+    wake-words:
+      - bot
+      - 小助手
+```
 
-    websocket-client:
-      url: ws://127.0.0.1:3001
-      token: ""
-      reconnect-interval: 5000          # 断线重连间隔，毫秒
-      heart-interval: 30000             # 心跳间隔，毫秒
-      debug: false                      # 打印原始帧
+### NapCat (OneBot11) 渠道
 
-    websocket-server:
-      host: 0.0.0.0
-      port: 3001
-      token: ""
-      debug: false
+```yaml
+dingdong:
+  qq:
+    enabled: true
+    adapter:
+      type: websocket-client
+      websocket-client:
+        url: ws://127.0.0.1:3001
+        token: ""
+    bot:
+      self-id: 123456789
+      command-prefix: ""
+      at-me-trigger: true
+      wake-words:
+        - 小助手
+      super-users:
+        - 123456789
+```
 
-    http-client:
-      url: http://127.0.0.1:3000
-      token: ""
-      timeout: 30000                    # HTTP 请求超时，毫秒
+### LLM 配置
 
-    http-server:
-      host: 0.0.0.0
-      port: 8080
-      token: ""
-      path: /napcat/webhook             # 接收上报的路径
-      api-url: ""                       # 反向 HTTP Client URL，用于主动调用 NapCat API
-      api-token: ""                     # 反向 HTTP Client Token
-      api-timeout: 30000                # 反向 HTTP Client 超时（毫秒）
-
-  # ========== Bot 基础配置 ==========
-  bot:
-    self-id: 0                          # 当前机器人 QQ 号
-    command-prefix: ""                  # 命令前缀，空字符串表示无前缀
-    at-me-trigger: true                 # 被 @ 时是否自动触发 Agent（需 agent.enabled=true）
-    ignore-self-message: true           # 是否过滤自己发的消息
-    super-users: []                     # 超级管理员 QQ 号列表
-    wake-words:                         # 关键词唤醒列表
-      - "机器人"
-      - "bot"
-
-  # ========== LLM 配置 ==========
+```yaml
+dingdong:
   llm:
-    provider: openai                    # openai / anthropic / ollama / custom
-
+    provider: openai                  # openai / anthropic / ollama
     openai:
       base-url: https://api.openai.com/v1
-      api-key: ""
-      model: gpt-4o-mini                # 必须显式配置，无默认值
-      max-tokens: 2000
-      temperature: 0.7
-      timeout: 60000
-
-    anthropic:
-      base-url: https://api.anthropic.com
-      api-key: ""
-      model: claude-sonnet-4-6          # 必须显式配置，无默认值
-      max-tokens: 2000
-      temperature: 0.7
-      timeout: 60000
-
-    ollama:
-      base-url: http://localhost:11434
-      api-key: ""
-      model: llama3                     # 必须显式配置，无默认值
+      api-key: ${OPENAI_API_KEY}
+      model: gpt-4o
       timeout: 120000
-
-    custom:
-      base-url: ""                      # 任意兼容 OpenAI 协议的端点
-      api-key: ""
-      model: ""                         # 必须显式配置，无默认值
-      max-tokens: 2000
-      timeout: 60000
-
-    fallback:                           # 备用模型（主模型失败时自动切换）
-      enabled: false
-      provider: openai                  # openai / anthropic / ollama / custom
-      base-url: ""
-      api-key: ""
-      model: ""
-      max-tokens: 2000
+      max-tokens: 4096
       temperature: 0.7
-      timeout: 60000
+    fallback:
+      enabled: true
+      provider: openai
+      base-url: https://api.openai.com/v1
+      api-key: ${OPENAI_API_KEY}
+      model: gpt-4o-mini
+```
 
-  # ========== Agent 配置 ==========
+### Agent 配置
+
+```yaml
+dingdong:
   agent:
-    enabled: false
-    max-react-rounds: 5                 # ReAct 最大思考轮数
-    system-prompt: "你是一个有用的 QQ 助手..."  # 内置默认值，可覆盖
-    timeout-per-round: 30000            # 每轮 LLM 调用超时（毫秒）
-    session-ttl: 3600                   # 会话过期时间，秒
-    show-tool-process: false            # 是否将工具调用过程发送到聊天
-    max-history-messages: 50            # 会话历史最大消息条数，超出时自动截断
-    enable-vision: true                 # 是否启用图片识别（如果 LLM 服务器无法访问 QQ 图片链接，建议关闭）
+    enabled: true
+    max-react-rounds: 5
+    show-tool-process: true
+    session-ttl: 7200
+    max-history-messages: 40
+    enable-vision: true
+    skills-path: skills
+    text-to-image:
+      enabled: true
+      base-url: https://api.openai.com/v1
+      api-key: ${OPENAI_API_KEY}
+      model: dall-e-3
+    tts:
+      enabled: true
+      base-url: "https://api.edge-tts.example.com/v1/audio/speech"
+      model: "edge-tts"
+      default-voice: "zh-CN-XiaoyiNeural"
     builtin:
       web-search:
-        enabled: true                   # 联网搜索 (SearxNG)
-      fetch-url:
-        enabled: true                   # HTTP 抓取网页内容
-      date-time:
-        enabled: true                   # 日期时间查询
+        enabled: true
+        instance: https://your-search-api.example.com
+        result-count: 5
+```
 
-  # ========== 持久化记忆 ==========
+### Memory 配置
+
+```yaml
+dingdong:
   memory:
-    enabled: false                      # 是否启用长期记忆
-    max-results: 5                      # 每次对话检索记忆条数
-    extract-threshold: 20               # 累积多少条消息后触发 LLM 提取
-    test-data-enabled: false            # 启动时自动注入测试记忆数据（仅测试使用）
+    enabled: true
+    test-data-enabled: false
+```
 
-  # ========== 定时任务调度 ==========
+### Scheduler 配置
+
+```yaml
+dingdong:
   scheduler:
-    enabled: true                       # 是否启用定时任务调度
-    poll-interval-ms: 300000            # 轮询间隔（毫秒），默认 5 分钟
-    poll-window-ms: 300000              # 提前注册窗口（毫秒），默认 5 分钟
-
-  # ========== 高级配置 ==========
-  core:
-    event-executor:                     # 事件处理线程池
-      core-pool-size: 4
-      max-pool-size: 16
-      queue-capacity: 1000
-    message-post-format: array          # array / string，OneBot11 上报格式
-    sync-event-processing: false        # 是否同步处理事件
-    database-path: napcat_data/napcat.db  # SQLite 数据库文件路径
+    enabled: true
 ```
 
 ---
 
 ## 配置项详解
 
-### napcat.adapter
-
-控制与 NapCat 的通信方式，四选一。
-
-#### type = `websocket-client`（默认、推荐）
-
-主动连接 NapCat 的 WebSocket Server，双工通信，性能最好。
+### dingdong.qq-official
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| `url` | String | `ws://127.0.0.1:3001` | NapCat WS 地址 |
-| `token` | String | `""` | 鉴权 Token |
-| `reconnect-interval` | long | `5000` | 断线重连间隔（ms） |
-| `heart-interval` | long | `30000` | 心跳间隔（ms） |
-| `debug` | boolean | `false` | 是否打印原始 WS 帧 |
+| `enabled` | boolean | `true` | 是否启用 QQ 官方渠道 |
+| `app-id` | String | - | QQ 开放平台应用 AppID |
+| `app-secret` | String | - | QQ 开放平台应用 AppSecret |
+| `sandbox` | boolean | `true` | 沙箱环境（正式发布改为 false） |
+| `trigger-mode` | String | `all` | 触发模式：`all` / `wake-word` / `mention-or-wake` |
+| `wake-words` | `List<String>` | `[]` | 唤醒词列表 |
 
-**对应 NapCat 配置：**
-
-```json
-{
-  "network": {
-    "websocketServers": [{
-      "enable": true,
-      "port": 3001,
-      "token": ""
-    }]
-  }
-}
-```
-
-#### type = `websocket-server`
-
-等待 NapCat 主动连接。适合多 NapCat 实例连接同一个 Bot 服务的场景。
+### dingdong.qq
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| `host` | String | `"0.0.0.0"` | 监听地址 |
-| `port` | int | `3001` | 监听端口 |
-| `token` | String | `""` | 鉴权 Token |
-| `debug` | boolean | `false` | 是否打印原始 WS 帧 |
+| `enabled` | boolean | `true` | 是否启用 NapCat 渠道 |
+| `adapter.type` | String | `websocket-client` | 通信方式：`websocket-client` / `websocket-server` / `http-client` / `http-server` |
+| `bot.self-id` | long | `0` | 机器人 QQ 号 |
+| `bot.command-prefix` | String | `""` | 命令前缀 |
+| `bot.at-me-trigger` | boolean | `true` | 被 @ 时自动走 Agent |
+| `bot.wake-words` | `List<String>` | `[]` | 关键词唤醒列表 |
+| `bot.super-users` | `List<long>` | `[]` | 超级管理员 QQ 号列表 |
 
-#### type = `http-client`
-
-主动调用 NapCat 的 HTTP API。
-
-| 配置项 | 类型 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `url` | String | `http://127.0.0.1:3000` | NapCat HTTP 地址 |
-| `token` | String | `""` | 鉴权 Token |
-| `timeout` | long | `30000` | HTTP 请求超时（ms） |
-
-#### type = `http-server`
-
-被动接收 NapCat 的 HTTP 上报。适合 Webhook 风格的部署。
+### dingdong.llm
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| `host` | String | `"0.0.0.0"` | 监听地址 |
-| `port` | int | `8080` | 监听端口 |
-| `token` | String | `""` | 鉴权 Token |
-| `path` | String | `"/napcat/webhook"` | 接收上报的 URL 路径 |
-| `api-url` | String | `""` | 反向 HTTP Client URL，用于主动调用 NapCat API |
-| `api-token` | String | `""` | 反向 HTTP Client Token |
-| `api-timeout` | long | `30000` | 反向 HTTP Client 超时（ms） |
+| `provider` | String | `openai` | LLM 提供商：`openai` / `anthropic` / `ollama` |
+| `openai.base-url` | String | - | OpenAI 兼容 API 地址 |
+| `openai.api-key` | String | - | API Key |
+| `openai.model` | String | - | 模型名称（必须显式配置） |
+| `openai.max-tokens` | int | `2000` | 最大生成 Token 数 |
+| `openai.temperature` | double | `0.7` | 采样温度 |
+| `openai.timeout` | long | `60000` | 请求超时（ms） |
+| `anthropic.*` | - | - | 同上结构，Claude 专有配置 |
+| `ollama.*` | - | - | 同上结构，Ollama 专有配置 |
+| `fallback.enabled` | boolean | `false` | 是否启用备用模型 |
+| `fallback.provider` | String | `openai` | 备用模型提供商 |
 
-**注意：** 纯 HTTP Server 模式下无法主动调用 API，需配置 `api-url` 指向 NapCat 的 HTTP Server。
-
----
-
-### napcat.bot
-
-| 配置项 | 类型 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `self-id` | long | `0` | 当前机器人 QQ 号，用于过滤自身消息和 @ 判断 |
-| `command-prefix` | String | `""` | 命令前缀。空字符串表示无前缀，直接匹配命令模板开头 |
-| `at-me-trigger` | boolean | `true` | 被 @ 时是否尝试走 Agent 流程（需 agent.enabled=true） |
-| `ignore-self-message` | boolean | `true` | 是否忽略机器人自己发送的消息 |
-| `super-users` | `List<long>` | `[]` | 超级管理员 QQ 号，用于 `Role.SUPERUSER` 判断 |
-| `wake-words` | `List<String>` | `["机器人", "bot"]` | 关键词唤醒列表，消息包含任一唤醒词时视为触发 |
-
----
-
-### napcat.llm
-
-| 配置项 | 类型 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `provider` | String | `openai` | LLM 提供商：`openai` / `anthropic` / `ollama` / `custom` |
-
-各提供商专有配置：
-
-| 配置项 | 类型 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `base-url` | String | 见上方完整示例 | API 基础地址 |
-| `api-key` | String | `""` | API Key（Ollama 可为空） |
-| `model` | String | `null`（必须显式配置） | 模型名称 |
-| `max-tokens` | int | `2000` | 最大生成 Token 数 |
-| `temperature` | double | `0.7` | 采样温度 |
-| `timeout` | long | `60000` | 单次请求超时（ms） |
-
-**注意：** `model` 字段在所有 Provider 中均无内置默认值，必须显式配置。
-
----
-
-### napcat.agent
+### dingdong.agent
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
 | `enabled` | boolean | `false` | 是否启用 Agent 功能 |
 | `max-react-rounds` | int | `5` | ReAct 循环最大轮数 |
-| `system-prompt` | String | 内置提示 | Agent 系统提示词 |
-| `timeout-per-round` | long | `30000` | 每轮 LLM 调用超时（ms） |
 | `session-ttl` | long | `3600` | 会话上下文过期时间（秒） |
 | `show-tool-process` | boolean | `false` | 是否将工具调用过程发送到聊天 |
-| `max-history-messages` | int | `50` | 会话历史最大消息条数，超出时自动截断（保留 system + 最近 N 条） |
+| `max-history-messages` | int | `50` | 会话历史最大消息条数 |
+| `enable-vision` | boolean | `true` | 是否启用多模态图片理解 |
+| `skills-path` | String | `skills` | Agent 技能文件目录 |
 
-**内置工具开关：**
-
-| 配置项 | 类型 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `builtin.web-search.enabled` | boolean | `true` | 联网搜索 (DuckDuckGo) |
-| `builtin.fetch-url.enabled` | boolean | `true` | HTTP 抓取网页内容 |
-| `builtin.date-time.enabled` | boolean | `true` | 日期时间查询 |
-
----
-
-### napcat.core
+### dingdong.core
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| `event-executor.core-pool-size` | int | `4` | 事件处理线程池核心线程数 |
-| `event-executor.max-pool-size` | int | `16` | 最大线程数 |
-| `event-executor.queue-capacity` | int | `1000` | 任务队列容量 |
-| `message-post-format` | String | `"array"` | OneBot11 消息上报格式：`array` 或 `string` |
-| `sync-event-processing` | boolean | `false` | 是否同步处理事件 |
-| `database-path` | String | `"napcat_data/napcat.db"` | SQLite 数据库文件路径（定时任务、持久化记忆共用） |
-
----
-
-### napcat.memory
-
-| 配置项 | 类型 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `enabled` | boolean | `false` | 是否启用长期记忆功能 |
-| `max-results` | int | `5` | 每次对话时从记忆库检索的最大条数 |
-| `extract-threshold` | int | `20` | 会话中累积多少条非 system 消息后，触发 LLM 异步提取记忆 |
-| `test-data-enabled` | boolean | `false` | 启动时自动注入测试记忆数据，用于本地测试归纳和检索功能 |
-
-启用后，Agent 会在对话中自动提取用户的关键事实、偏好和重要话题，存入 SQLite。新会话启动时会自动检索相关记忆并注入 system prompt。
-
-**数据流：**
-- 对话中 → `MemoryExtractor` 异步提取结构化记忆 → `memories` 表（type=fact/preference/topic）
-- `/new` / 过期清理 / 程序关闭 → `persistFullSession` → `memories` 表（type=full_session，仅备份）
-- 每日凌晨 1 点 → `DailyMemorySummarizer` 读取当天结构化记忆 → LLM 归纳 → `memory_summaries` 表
-- 新会话启动 → 优先检索 `memory_summaries`（归纳摘要），其次检索 `memories`（碎片化记忆）
-
----
-
-### napcat.scheduler
-
-| 配置项 | 类型 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `enabled` | boolean | `true` | 是否启用定时任务调度 |
-| `poll-interval-ms` | long | `300000` | 轮询间隔（毫秒），默认 5 分钟 |
-| `poll-window-ms` | long | `300000` | 提前注册窗口（毫秒），默认 5 分钟 |
-
-Agent 可通过 `create_schedule` 工具创建 Cron 定时任务，任务持久化到 SQLite，重启后自动恢复。
-
----
-
-### napcat.llm.fallback
-
-| 配置项 | 类型 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `enabled` | boolean | `false` | 是否启用备用模型 |
-| `provider` | String | `openai` | 备用模型类型：`openai` / `anthropic` / `ollama` / `custom` |
-| `base-url` | String | - | 备用模型 API 地址 |
-| `api-key` | String | `""` | 备用模型 API Key |
-| `model` | String | - | 备用模型名称 |
-| `max-tokens` | int | `2000` | 最大 Token 数 |
-| `temperature` | double | `0.7` | 采样温度 |
-| `timeout` | long | `60000` | 请求超时（毫秒） |
-
-主模型调用失败时，自动切换到备用模型重试一次。
+| `database-path` | String | `"dingdong_data/dingdong.db"` | SQLite 数据库文件路径 |
+| `message-post-format` | String | `"array"` | OneBot11 上报格式：`array` 或 `string` |
 
 ---
 
 ## 多环境配置
 
-Spring Boot 原生支持：
+Spring Boot 原生支持多环境：
 
 ```yaml
 # application-dev.yml
-napcat:
-  adapter:
-    type: websocket-client
-    websocket-client:
-      url: ws://127.0.0.1:3001
+dingdong:
+  qq:
+    adapter:
+      type: websocket-client
+      websocket-client:
+        url: ws://127.0.0.1:3001
 
 # application-prod.yml
-napcat:
-  adapter:
-    type: websocket-client
-    websocket-client:
-      url: ws://napcat.internal:3001
-      token: ${NAPCAT_TOKEN}
+dingdong:
+  qq:
+    adapter:
+      type: websocket-client
+      websocket-client:
+        url: ws://napcat.internal:3001
+        token: ${NAPCAT_TOKEN}
   llm:
     openai:
       api-key: ${OPENAI_API_KEY}
 ```
+
+更多配置项详见 `application.example.yml` 文件。

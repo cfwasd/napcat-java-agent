@@ -1,39 +1,41 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="NapCat Java SDK logo">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="叮咚 Bot logo">
   <defs>
-    <linearGradient id="bg" x1="18" y1="16" x2="108" y2="112" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#38bdf8" />
-      <stop offset="0.56" stop-color="#6366f1" />
-      <stop offset="1" stop-color="#8b5cf6" />
+    <linearGradient id="bg" x1="12" y1="12" x2="116" y2="116" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#667eea" />
+      <stop offset="100%" stop-color="#764ba2" />
     </linearGradient>
-    <linearGradient id="panel" x1="36" y1="34" x2="92" y2="90" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#ffffff" />
-      <stop offset="1" stop-color="#e9edff" />
-    </linearGradient>
-    <linearGradient id="mouth" x1="52" y1="77" x2="76" y2="77" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#a78bfa" />
-      <stop offset="1" stop-color="#7c3aed" />
+    <linearGradient id="bell" x1="40" y1="35" x2="88" y2="95" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#ffd54f" />
+      <stop offset="100%" stop-color="#ffb300" />
     </linearGradient>
   </defs>
 
-  <rect x="12" y="12" width="104" height="104" rx="28" fill="url(#bg)" />
+  <!-- 圆形背景 -->
+  <circle cx="64" cy="64" r="58" fill="url(#bg)" />
 
-  <circle cx="64" cy="24" r="6" fill="#fef08a" />
-  <rect x="61" y="30" width="6" height="10" rx="3" fill="#fef08a" />
+  <!-- 铃铛主体 -->
+  <path d="M42 68 C42 45, 50 35, 64 35 C78 35, 86 45, 86 68 L88 82 L40 82 Z"
+        fill="url(#bell)" stroke="#e6a800" stroke-width="1.5" />
 
-  <rect x="28" y="36" width="72" height="56" rx="22" fill="url(#panel)" />
-  <path fill="#ffffff" opacity="0.34" d="M39 43c5.88-8.76 16.19-14 27.83-14 8.68 0 16.62 2.92 22.9 7.69-4.98-2.57-10.65-4.01-16.67-4.01-18.93 0-34.7 14.13-37.28 32.37A26.79 26.79 0 0 1 39 43z" />
+  <!-- 铃铛顶部装饰 -->
+  <circle cx="64" cy="30" r="5" fill="url(#bell)" stroke="#e6a800" stroke-width="1.5" />
+  <rect x="61" y="30" width="6" height="4" rx="1" fill="#e6a800" />
 
-  <rect x="44" y="54" width="12" height="12" rx="4" fill="#312e81" />
-  <rect x="72" y="54" width="12" height="12" rx="4" fill="#312e81" />
-  <rect x="48" y="57" width="3" height="3" rx="1.5" fill="#ffffff" />
-  <rect x="76" y="57" width="3" height="3" rx="1.5" fill="#ffffff" />
+  <!-- 铃铛底部 -->
+  <rect x="37" y="80" width="54" height="5" rx="2" fill="#e6a800" />
 
-  <rect x="52" y="74" width="24" height="7" rx="3.5" fill="url(#mouth)" />
+  <!-- 铃舌 -->
+  <circle cx="64" cy="77" r="4" fill="#e6a800" />
 
-  <path d="M40 94h48c6.63 0 12 5.37 12 12 0 1.1-.9 2-2 2H54c-8.84 0-16-7.16-16-16v0z" fill="#ffffff" opacity="0.98" />
-  <circle cx="55" cy="100" r="4" fill="#38bdf8" />
-  <circle cx="68" cy="100" r="4" fill="#6366f1" />
-  <circle cx="81" cy="100" r="4" fill="#a78bfa" />
+  <!-- 左侧声波 -->
+  <path d="M28 56 Q18 64, 28 72" fill="none" stroke="#ffecb3" stroke-width="2" stroke-linecap="round" opacity="0.7" />
+  <path d="M22 48 Q8 64, 22 80" fill="none" stroke="#ffecb3" stroke-width="2" stroke-linecap="round" opacity="0.5" />
 
-  <path fill="#fde68a" d="M100 34l2.2 4.46 4.92.72-3.56 3.47.84 4.89L100 45.22l-4.4 2.32.84-4.89-3.56-3.47 4.92-.72L100 34z" />
+  <!-- 右侧声波 -->
+  <path d="M100 56 Q110 64, 100 72" fill="none" stroke="#ffecb3" stroke-width="2" stroke-linecap="round" opacity="0.7" />
+  <path d="M106 48 Q120 64, 106 80" fill="none" stroke="#ffecb3" stroke-width="2" stroke-linecap="round" opacity="0.5" />
+
+  <!-- 铃铛上的"叮"字 -->
+  <text x="64" y="66" text-anchor="middle" font-family="Arial, sans-serif"
+        font-size="20" font-weight="bold" fill="#7b4e00" opacity="0.85">叮</text>
 </svg>
