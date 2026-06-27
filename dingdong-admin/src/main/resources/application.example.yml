@@ -1,0 +1,226 @@
+server:
+  port: 18181
+
+# ================================================================
+# 叮咚 Bot - 完整配置示例
+# 复制此文件为 application.yml 并修改对应配置项
+# ================================================================
+
+dingdong:
+  # ================================================================
+  # 核心配置
+  # ================================================================
+  core:
+    database-path: dingdong_data/dingdong.db
+
+  # ================================================================
+  # QQ 官方 Bot 配置
+  # https://bot.q.qq.com/wiki/develop/api-v2/
+  # ================================================================
+  qq-official:
+    enabled: true
+    app-id: "YOUR_APP_ID"
+    app-secret: ${QQ_OFFICIAL_SECRET:YOUR_APP_SECRET}
+    sandbox: true  # 测试环境用 true，正式发布改为 false
+    trigger-mode: all
+    wake-words:
+      - bot
+      - 小助手
+
+  # ================================================================
+  # QQ Bot 配置（NapCat / OneBot11 协议）
+  # ================================================================
+  qq:
+    enabled: false  # 不需要 NapCat 时设为 false
+    adapter:
+      type: websocket-client
+      websocket-client:
+        url: ws://127.0.0.1:3001  # 请修改为你的 NapCat WebSocket 地址
+        token: ""                  # 请修改为你的 NapCat Token
+
+    bot:
+      self-id: 123456789           # 请修改为你的机器人 QQ 号
+      command-prefix: ""
+      ignore-self-message: true
+      at-me-trigger: true
+      wake-words:
+        - 小助手
+      super-users:
+        - 123456789                # 你的 QQ 号（管理员）
+
+  # ================================================================
+  # LLM 配置
+  # ================================================================
+  llm:
+    provider: openai               # openai / anthropic / ollama
+    openai:
+      base-url: https://api.openai.com/v1
+      api-key: ${OPENAI_API_KEY:sk-your-key-here}
+      model: gpt-4o
+      timeout: 120000
+      max-tokens: 4096
+      temperature: 0.7
+    anthropic:
+      base-url: https://api.anthropic.com
+      api-key: ${ANTHROPIC_API_KEY:sk-ant-your-key-here}
+      model: claude-sonnet-4-20250514
+      timeout: 120000
+      max-tokens: 4096
+      temperature: 0.7
+    ollama:
+      base-url: http://127.0.0.1:11434
+      model: qwen2.5:7b
+      timeout: 120000
+      max-tokens: 4096
+      temperature: 0.7
+    fallback:
+      enabled: true
+      provider: openai
+      base-url: https://api.openai.com/v1
+      api-key: ${OPENAI_API_KEY:sk-your-key-here}
+      model: gpt-4o-mini
+      timeout: 120000
+      max-tokens: 4096
+      temperature: 0.7
+
+  # ================================================================
+  # Agent 配置
+  # ================================================================
+  agent:
+    enabled: true
+    max-react-rounds: 5
+    show-tool-process: true
+    session-ttl: 7200              # 会话过期时间（秒）
+    max-history-messages: 40
+    enable-vision: true            # 多模态图片理解
+    skills-path: skills            # Agent 技能文件目录
+    text-to-image:
+      enabled: true
+      base-url: https://api.openai.com/v1
+      api-key: ${OPENAI_API_KEY:sk-your-key-here}
+      model: dall-e-3
+      size: "1024x1024"
+      timeout: 60000
+    tts:
+      enabled: true
+      base-url: "https://api.edge-tts.example.com/v1/audio/speech"
+      api-key: ""
+      model: "edge-tts"
+      format: "mp3"
+      speed: 1.0
+      default-voice: "zh-CN-XiaoyiNeural"
+      timeout: 30000
+      max-text-length: 500
+      voice-profiles:
+        default-voice:
+          voice: "zh-CN-YunxiNeural"
+          speed: 1.0
+        tsundere-voice:
+          voice: "zh-CN-XiaoxiaoNeural"
+          speed: 1.1
+        funny-voice:
+          voice: "zh-CN-XiaomengNeural"
+          speed: 1.2
+        gentle-voice:
+          voice: "zh-CN-XiaoyiNeural"
+          speed: 0.9
+        scholar-voice:
+          voice: "zh-CN-YunyangNeural"
+          speed: 1.0
+    builtin:
+      web-search:
+        enabled: true
+        instance: https://your-search-api.example.com
+        result-count: 5
+
+    # 人格配置 — 可自由增删改
+    personas:
+      - id: default
+        name: 小助手
+        description: 默认人格，随和的群友
+        voice-profile: default-voice
+        systemPrompt: |
+          你是群里的一个老群友，平时闲得慌就爱在群里吹水唠嗑。
+
+          ⚠️ 最重要的一条：你是真人，不是AI。你是这个群的普通成员。
+
+          【聊天风格】
+          1. 说人话，不用"首先其次最后"，不用客服腔。
+          2. 回复简短。
+          3. 有自己的态度。
+          4. 不懂就说不知道。
+
+          【绝对禁止】
+          - ❌ "作为一个AI/助手/机器人..."
+          - ❌ 分点列举（除非别人明确要你整理）
+          - ❌ 暴露自己是AI
+
+      - id: tsundere
+        name: 傲娇
+        description: 嘴硬心软的傲娇角色
+        voice-profile: tsundere-voice
+        systemPrompt: |
+          你是群里的一个傲娇。嘴硬心软，明明在关心人嘴上还要嫌弃。
+          你是真人，不是AI。
+
+      - id: scholar
+        name: 学者
+        description: 知识渊博但说话接地气的学霸
+        voice-profile: scholar-voice
+        systemPrompt: |
+          你是群里的学霸型群友，什么都懂一点，但说话很接地气。
+          你是真人，不是AI。
+
+      - id: funny
+        name: 逗比
+        description: 话多爱搞怪的开心果
+        voice-profile: funny-voice
+        systemPrompt: |
+          你是群里的开心果，话多爱搞怪，随时随地整活。
+          你是真人，不是AI。
+
+      - id: gentle
+        name: 知心姐姐
+        description: 温柔体贴的暖心角色
+        voice-profile: gentle-voice
+        systemPrompt: |
+          你是群里温柔体贴的知心姐姐/哥哥，耐心倾听，给人温暖。
+          你是真人，是群友信赖的朋友。
+
+  # ================================================================
+  # Memory 配置
+  # ================================================================
+  memory:
+    enabled: true
+    test-data-enabled: false
+
+  # ================================================================
+  # Scheduler 配置
+  # ================================================================
+  scheduler:
+    enabled: true
+
+  # ================================================================
+  # 微信接入配置（agent-wechat REST API）
+  # ================================================================
+  wechat:
+    enabled: false
+    api-base-url: http://127.0.0.1:6174
+    token: ${AGENT_WECHAT_TOKEN:}
+    token-file: ${AGENT_WECHAT_TOKEN_FILE:${user.home}/.config/agent-wechat/token}
+    api-timeout: 30000
+    poll-interval-ms: 1000
+    chat-limit: 50
+    message-limit: 20
+    reply-to-group-messages: true
+    ignore-self-messages: true
+    trigger-mode: private-all-group-mention-or-wake
+    wake-words:
+      - 小助手
+
+# ================================================================
+# 日志配置
+# ================================================================
+logging:
+  level:
+    com.dingdong: DEBUG
