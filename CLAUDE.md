@@ -97,4 +97,4 @@ mvn test -pl napcat-spring-boot-starter -Dtest=AgentWechatClientTest
 
 ## Documentation
 
-Full docs in [docs/](docs/): quick-start, programming model, configuration reference, event/message model, adapter guide, agent guide, internal architecture. Online: https://cfwasd.github.io/napcat-java-agent/
+Full docs in [docs/](docs/): quick-start, programming model, configuration reference, event/message model, adapter guide, agent guide, internal architecture. Online: https://cfwasd.github.io/dingdong-bot/
