@@ -31,6 +31,7 @@ public class QqOfficialApi {
                 .connectTimeout(15, TimeUnit.SECONDS)
                 .readTimeout(30, TimeUnit.SECONDS)
                 .writeTimeout(30, TimeUnit.SECONDS)
+                .addInterceptor(new TokenRefreshInterceptor(tokenManager))
                 .build();
         this.objectMapper = new ObjectMapper();
     }
@@ -156,6 +157,41 @@ public class QqOfficialApi {
 
     public String uploadC2cFile(String userOpenid, int fileType, String url) throws IOException {
         return uploadFile("/v2/users/" + userOpenid + "/files", fileType, url);
+    }
+
+    /**
+     * OkHttp 拦截器：检测到 401 时自动刷新 token 并重试一次。
+     */
+    private class TokenRefreshInterceptor implements Interceptor {
+        private final QqOfficialTokenManager tokenManager;
+
+        TokenRefreshInterceptor(QqOfficialTokenManager tokenManager) {
+            this.tokenManager = tokenManager;
+        }
+
+        @Override
+        public Response intercept(Chain chain) throws IOException {
+            Request request = chain.request();
+            Response response = chain.proceed(request);
+            if (response.code() == 401) {
+                response.close();
+                log.warn("QQ Official API returned 401, forcing token refresh...");
+                try {
+                    tokenManager.forceRefresh().join();
+                    String newToken = tokenManager.getToken();
+                    if (newToken == null || newToken.isBlank()) {
+                        throw new IOException("Token refresh returned empty token");
+                    }
+                    Request newRequest = request.newBuilder()
+                            .header("Authorization", "QQBot " + newToken)
+                            .build();
+                    return chain.proceed(newRequest);
+                } catch (Exception e) {
+                    throw new IOException("Token refresh failed after 401", e);
+                }
+            }
+            return response;
+        }
     }
 
     private String uploadFile(String path, int fileType, String url) throws IOException {

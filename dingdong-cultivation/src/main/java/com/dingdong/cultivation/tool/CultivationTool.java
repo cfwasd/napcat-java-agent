@@ -574,9 +574,7 @@ public class CultivationTool {
                 LocalDateTime lastTime = LocalDateTime.parse(user.lastCultivateTime, ISO_FMT);
                 double hoursPassed = ChronoUnit.MINUTES.between(lastTime, LocalDateTime.now()) / 60.0;
                 hoursPassed = Math.min(hoursPassed, 8.0); // 最多8小时收益
-                if (hoursPassed >= 0.5) { // 超过30分钟才结算
-                    passiveGain = (int) (hoursPassed * user.rootBone * realmCoeff(user.realm) * 0.5);
-                }
+                passiveGain = (int) (hoursPassed * user.rootBone * realmCoeff(user.realm) * 0.5);
             }
 
             // 应用加成并更新

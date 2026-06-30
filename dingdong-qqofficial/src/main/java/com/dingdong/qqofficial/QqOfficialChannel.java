@@ -28,8 +28,10 @@ public class QqOfficialChannel implements BotChannel {
     private volatile boolean running;
     private QqOfficialWsClient wsClient;
     private QqOfficialDispatcher.AgentInvoker agentInvoker;
-    private ScheduledExecutorService reconnectScheduler;
+    private volatile ScheduledExecutorService reconnectScheduler;
     private final AtomicInteger reconnectAttempts = new AtomicInteger(0);
+    private volatile boolean intentionallyReconnecting = false;
+    private ScheduledExecutorService healthCheckScheduler;
 
     public QqOfficialChannel(QqOfficialProperties properties) {
         this.properties = properties;
@@ -69,6 +71,14 @@ public class QqOfficialChannel implements BotChannel {
 
         running = true;
         connectWs();
+
+        // 每 5 分钟检查一次 token 健康状态，防止假在线
+        healthCheckScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "qq-official-health-check");
+            t.setDaemon(true);
+            return t;
+        });
+        healthCheckScheduler.scheduleAtFixedRate(this::checkTokenHealth, 5, 5, TimeUnit.MINUTES);
     }
 
     private synchronized void connectWs() {
@@ -93,11 +103,20 @@ public class QqOfficialChannel implements BotChannel {
 
     private void onWsClose(int code, String reason) {
         if (!running) return;
+        if (intentionallyReconnecting) {
+            log.info("WS closed due to intentional reconnect, skipping scheduled reconnect");
+            return;
+        }
+        if ("Heartbeat timeout".equals(reason)) {
+            log.warn("QQ Official WS closed due to heartbeat timeout, forcing token refresh and reconnect...");
+            doReconnectWithTokenRefresh();
+            return;
+        }
         log.warn("QQ Official WS closed, scheduling reconnect... code={}, reason={}", code, reason);
         scheduleReconnect();
     }
 
-    private void scheduleReconnect() {
+    private synchronized void scheduleReconnect() {
         if (!running || reconnectScheduler != null) return;
         reconnectScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "qq-official-reconnect");
@@ -115,16 +134,54 @@ public class QqOfficialChannel implements BotChannel {
     }
 
     private synchronized void doReconnect() {
-        if (wsClient != null) {
-            try { wsClient.closeBlocking(); } catch (Exception ignored) {}
+        intentionallyReconnecting = true;
+        try {
+            if (wsClient != null) {
+                try { wsClient.closeBlocking(); } catch (Exception ignored) {}
+            }
+            // closeBlocking 会触发 onClose → scheduleReconnect，
+            // 取消这个误触发的定时重连，避免短时间内重复连接
+            if (reconnectScheduler != null) {
+                reconnectScheduler.shutdownNow();
+                reconnectScheduler = null;
+            }
+            connectWs();
+        } finally {
+            intentionallyReconnecting = false;
         }
-        connectWs();
+    }
+
+    private void doReconnectWithTokenRefresh() {
+        try {
+            tokenManager.forceRefresh().join();
+            log.info("Token refreshed after heartbeat timeout, reconnecting...");
+        } catch (Exception e) {
+            log.error("Token refresh after heartbeat timeout failed, reconnecting with existing token anyway", e);
+        }
+        doReconnect();
+    }
+
+    private void checkTokenHealth() {
+        if (!running) return;
+        if (!tokenManager.isTokenValid()) {
+            log.warn("Token health check failed: token invalid, forcing refresh and reconnect...");
+            try {
+                tokenManager.forceRefresh().join();
+                doReconnect();
+            } catch (Exception e) {
+                log.error("Token health check refresh failed", e);
+            }
+        }
     }
 
     @Override
     public void stop() {
         running = false;
         tokenManager.setOnRefreshedCallback(null);
+        if (healthCheckScheduler != null) {
+            healthCheckScheduler.shutdownNow();
+            healthCheckScheduler = null;
+        }
         if (reconnectScheduler != null) {
             reconnectScheduler.shutdownNow();
             reconnectScheduler = null;

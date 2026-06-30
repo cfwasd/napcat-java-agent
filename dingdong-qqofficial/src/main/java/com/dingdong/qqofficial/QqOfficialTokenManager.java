@@ -28,7 +28,7 @@ public class QqOfficialTokenManager {
 
     private volatile String accessToken;
     private volatile long expiresAtMs;
-    private ScheduledExecutorService scheduler;
+    private volatile ScheduledExecutorService scheduler;
     private Runnable onRefreshedCallback;
 
     public QqOfficialTokenManager(String appId, String appSecret) {
@@ -55,7 +55,13 @@ public class QqOfficialTokenManager {
             t.setDaemon(true);
             return t;
         });
-        forceRefresh().thenRun(this::scheduleNextRefresh);
+        forceRefresh()
+            .thenRun(this::scheduleNextRefresh)
+            .exceptionally(ex -> {
+                log.warn("Initial token refresh failed, retrying in 60s: {}", ex.getMessage());
+                scheduler.schedule(this::scheduleNextRefresh, 60, TimeUnit.SECONDS);
+                return null;
+            });
     }
 
     public void stop() {

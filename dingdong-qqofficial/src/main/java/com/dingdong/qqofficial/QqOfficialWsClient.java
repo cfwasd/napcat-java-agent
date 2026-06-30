@@ -29,7 +29,11 @@ public class QqOfficialWsClient extends WebSocketClient {
     private final String token;
     private ScheduledExecutorService heartbeatScheduler;
     private ScheduledFuture<?> heartbeatFuture;
+    private ScheduledFuture<?> heartbeatTimeoutFuture;
+    private volatile long lastHeartbeatAckMs = 0;
+    private static final long HEARTBEAT_TIMEOUT_MS = 2 * 60 * 1000L; // 2分钟
     private volatile boolean identified;
+    private volatile boolean heartbeatTimeout = false;
 
     public QqOfficialWsClient(URI serverUri, String token, int intents,
                                Consumer<JsonNode> eventHandler,
@@ -46,7 +50,7 @@ public class QqOfficialWsClient extends WebSocketClient {
     @Override
     public void onOpen(ServerHandshake handshake) {
         log.info("QQ Official WS connected: status={}", handshake.getHttpStatus());
-        heartbeatScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+        heartbeatScheduler = Executors.newScheduledThreadPool(2, r -> {
             Thread t = new Thread(r, "qq-official-heartbeat");
             t.setDaemon(true);
             return t;
@@ -77,6 +81,7 @@ public class QqOfficialWsClient extends WebSocketClient {
                     break;
                 }
                 case 11: // Heartbeat ACK
+                    lastHeartbeatAckMs = System.currentTimeMillis();
                     log.debug("QQ Official WS heartbeat ACK");
                     break;
                 default:
@@ -111,6 +116,7 @@ public class QqOfficialWsClient extends WebSocketClient {
 
     private void startHeartbeat(int intervalMs) {
         if (heartbeatScheduler == null) return;
+        lastHeartbeatAckMs = System.currentTimeMillis();
         heartbeatFuture = heartbeatScheduler.scheduleAtFixedRate(() -> {
             try {
                 ObjectNode payload = objectMapper.createObjectNode();
@@ -121,6 +127,15 @@ public class QqOfficialWsClient extends WebSocketClient {
                 log.warn("Heartbeat send failed", e);
             }
         }, intervalMs, intervalMs, TimeUnit.MILLISECONDS);
+        // 每 30 秒检查一次心跳 ACK 是否超时
+        heartbeatTimeoutFuture = heartbeatScheduler.scheduleAtFixedRate(() -> {
+            long elapsed = System.currentTimeMillis() - lastHeartbeatAckMs;
+            if (elapsed > HEARTBEAT_TIMEOUT_MS) {
+                log.warn("QQ Official WS heartbeat timeout ({}ms > {}ms), closing connection...", elapsed, HEARTBEAT_TIMEOUT_MS);
+                heartbeatTimeout = true;
+                close(1011, "Heartbeat timeout");
+            }
+        }, 30, 30, TimeUnit.SECONDS);
     }
 
     private int seqNumber() {
@@ -131,10 +146,13 @@ public class QqOfficialWsClient extends WebSocketClient {
     public void onClose(int code, String reason, boolean remote) {
         log.warn("QQ Official WS closed: code={}, reason={}, remote={}", code, reason, remote);
         identified = false;
+        boolean wasTimeout = heartbeatTimeout;
+        heartbeatTimeout = false;
         if (heartbeatFuture != null) heartbeatFuture.cancel(false);
+        if (heartbeatTimeoutFuture != null) heartbeatTimeoutFuture.cancel(false);
         if (heartbeatScheduler != null) heartbeatScheduler.shutdownNow();
         if (closeCallback != null) {
-            try { closeCallback.accept(code, reason); } catch (Exception e) {
+            try { closeCallback.accept(code, wasTimeout ? "Heartbeat timeout" : reason); } catch (Exception e) {
                 log.warn("Close callback error", e);
             }
         }
